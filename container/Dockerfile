@@ -25,7 +25,45 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     poppler-utils \
+    python3 \
+    python3-pip \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# Python packages used by OpenClaw workspace scripts (Fathom, finance, planning, etc.)
+# Installed system-wide; the stub-venv overlay (see below) makes scripts that
+# `source venv/bin/activate` transparently use this Python.
+RUN pip3 install --break-system-packages --no-cache-dir \
+    requests \
+    python-docx \
+    python-dateutil \
+    lxml \
+    beautifulsoup4 \
+    pillow \
+    openpyxl \
+    cryptography \
+    flask \
+    google-api-python-client \
+    google-auth \
+    google-auth-oauthlib \
+    google-auth-httplib2 \
+    gspread \
+    flask-cors \
+    gunicorn \
+    svix \
+    browser-cookie3
+
+# Stub venv for OpenClaw backwards compatibility.
+# Cron prompts written for the Mac venv (`source venv/bin/activate && python3 ...`)
+# get this directory bind-mounted over the Mac venv path at container runtime.
+# The stub forwards to system Python (which has the packages above).
+RUN mkdir -p /opt/nanoclaw/stub-venv/bin \
+    && ln -s /usr/bin/python3 /opt/nanoclaw/stub-venv/bin/python \
+    && ln -s /usr/bin/python3 /opt/nanoclaw/stub-venv/bin/python3 \
+    && ln -s /usr/bin/pip3    /opt/nanoclaw/stub-venv/bin/pip \
+    && ln -s /usr/bin/pip3    /opt/nanoclaw/stub-venv/bin/pip3 \
+    && printf '# nanoclaw stub venv — no-op activate\nexport VIRTUAL_ENV=/opt/nanoclaw/stub-venv\nexport PATH="/opt/nanoclaw/stub-venv/bin:$PATH"\n' > /opt/nanoclaw/stub-venv/bin/activate \
+    && chmod +x /opt/nanoclaw/stub-venv/bin/activate
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium

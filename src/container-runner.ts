@@ -4,6 +4,7 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -14,8 +15,11 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   ONECLI_URL,
+  QMD_HOST_DIR,
+  QMD_WORKSPACE_DIR,
   TIMEZONE,
 } from './config.js';
+import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -43,6 +47,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  model?: string;
 }
 
 export interface ContainerOutput {
@@ -233,9 +238,7 @@ function buildVolumeMounts(
       let max = 0;
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, entry.name);
-        const m = entry.isDirectory()
-          ? newestMtime(p)
-          : fs.statSync(p).mtimeMs;
+        const m = entry.isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs;
         if (m > max) max = m;
       }
       return max;
@@ -255,6 +258,30 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // QMD: mount the host's qmd cache/config directory and the indexed workspace
+  // at the SAME absolute paths inside the container. The qmd index stores
+  // absolute file references (e.g. /Users/.../workspace/...), so mounting at
+  // the same path is the simplest way to keep `qmd query` and `qmd get`
+  // functional without re-indexing. The agent runner connects to qmd via
+  // stdio MCP (see container/agent-runner/src/index.ts), pointing XDG_*_HOME
+  // at the mounted directories.
+  if (fs.existsSync(QMD_HOST_DIR)) {
+    mounts.push({
+      hostPath: QMD_HOST_DIR,
+      containerPath: QMD_HOST_DIR,
+      // Read-write so qmd can append to its mcp.log files. The container
+      // never runs `qmd update`, so the index itself isn't mutated from here.
+      readonly: false,
+    });
+    if (fs.existsSync(QMD_WORKSPACE_DIR)) {
+      mounts.push({
+        hostPath: QMD_WORKSPACE_DIR,
+        containerPath: QMD_WORKSPACE_DIR,
+        readonly: true,
+      });
+    }
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -263,9 +290,140 @@ function buildVolumeMounts(
       isMain,
     );
     mounts.push(...validatedMounts);
+
+    // Stub-venv overlays for OpenClaw backwards compatibility.
+    // Mac-built Python venvs don't run inside the Linux container, so we
+    // shadow each discovered venv with a host stub-venv directory whose
+    // bin/python forwards to the container's system Python (which has
+    // the required packages installed by the Dockerfile).
+    // Only mounts using mountAtHostPath are scanned, since only those expose
+    // their venvs at the original absolute paths the cron prompts use.
+    const stubVenv = ensureStubVenv();
+    for (const m of group.containerConfig.additionalMounts) {
+      if (!m.mountAtHostPath) continue;
+      const realRoot = (() => {
+        try {
+          const expanded = m.hostPath.startsWith('~/')
+            ? path.join(
+                process.env.HOME || os.homedir(),
+                m.hostPath.slice(2),
+              )
+            : m.hostPath;
+          return fs.realpathSync(expanded);
+        } catch {
+          return null;
+        }
+      })();
+      if (!realRoot) continue;
+      for (const venvPath of findVenvs(realRoot, 5)) {
+        mounts.push({
+          hostPath: stubVenv,
+          containerPath: venvPath, // shadow the Mac venv at the same absolute path
+          readonly: true,
+        });
+      }
+    }
   }
 
-  return mounts;
+  // Deduplicate by containerPath: later entries win. This lets a mountAtHostPath
+  // workspace mount (read-write) override the read-only QMD workspace mount that
+  // targets the same absolute path, and lets stub-venv overlays cleanly shadow
+  // any earlier mount of the same venv path.
+  const dedup = new Map<string, VolumeMount>();
+  for (const m of mounts) {
+    dedup.set(m.containerPath, m);
+  }
+  return Array.from(dedup.values());
+}
+
+/**
+ * Recursively find directories containing pyvenv.cfg under root, up to maxDepth.
+ * Skips common heavy directories. Returns absolute paths.
+ */
+function findVenvs(root: string, maxDepth: number): string[] {
+  const results: string[] = [];
+  const skip = new Set([
+    'node_modules',
+    '.git',
+    '__pycache__',
+    '.cache',
+    'dist',
+    'build',
+    '.next',
+  ]);
+  const walk = (dir: string, depth: number) => {
+    if (depth > maxDepth) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    // If this directory is itself a venv, record it and don't descend.
+    if (entries.some((e) => e.name === 'pyvenv.cfg' && e.isFile())) {
+      results.push(dir);
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (skip.has(entry.name)) continue;
+      walk(path.join(dir, entry.name), depth + 1);
+    }
+  };
+  walk(root, 0);
+  return results;
+}
+
+/**
+ * Ensure a host-side stub-venv directory exists in DATA_DIR. Returns the path.
+ * The stub contains symlinks targeting absolute container paths
+ * (/usr/bin/python3, /usr/bin/pip3) — these only resolve correctly inside
+ * the container, which is fine: that's the only place they're read.
+ */
+let stubVenvPath: string | null = null;
+function ensureStubVenv(): string {
+  if (stubVenvPath) return stubVenvPath;
+  const dir = path.join(DATA_DIR, 'stub-venv');
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+
+  const ensureSymlink = (target: string, linkPath: string) => {
+    try {
+      const current = fs.readlinkSync(linkPath);
+      if (current === target) return;
+      fs.unlinkSync(linkPath);
+    } catch {
+      // doesn't exist
+    }
+    fs.symlinkSync(target, linkPath);
+  };
+  ensureSymlink('/usr/bin/python3', path.join(binDir, 'python'));
+  ensureSymlink('/usr/bin/python3', path.join(binDir, 'python3'));
+  ensureSymlink('/usr/bin/pip3', path.join(binDir, 'pip'));
+  ensureSymlink('/usr/bin/pip3', path.join(binDir, 'pip3'));
+
+  const activate = path.join(binDir, 'activate');
+  const activateBody =
+    '# nanoclaw stub venv — no-op activate (forwards to container system Python)\n' +
+    'export VIRTUAL_ENV=/opt/nanoclaw/stub-venv\n' +
+    'export PATH="$VIRTUAL_ENV/bin:$PATH"\n';
+  if (
+    !fs.existsSync(activate) ||
+    fs.readFileSync(activate, 'utf-8') !== activateBody
+  ) {
+    fs.writeFileSync(activate, activateBody);
+    fs.chmodSync(activate, 0o755);
+  }
+
+  // Minimal pyvenv.cfg so anything that introspects the venv sees it as valid.
+  const cfg = path.join(dir, 'pyvenv.cfg');
+  const cfgBody = 'home = /usr/bin\nversion = 3.11\nstub = nanoclaw\n';
+  if (!fs.existsSync(cfg) || fs.readFileSync(cfg, 'utf-8') !== cfgBody) {
+    fs.writeFileSync(cfg, cfgBody);
+  }
+
+  stubVenvPath = dir;
+  return dir;
 }
 
 async function buildContainerArgs(
@@ -277,6 +435,19 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // QMD: tell the in-container agent runner where to find the qmd index/config
+  // when it spawns `qmd mcp` as a stdio MCP server.
+  if (fs.existsSync(QMD_HOST_DIR)) {
+    args.push(
+      '-e',
+      `NANOCLAW_QMD_XDG_CACHE_HOME=${path.join(QMD_HOST_DIR, 'xdg-cache')}`,
+    );
+    args.push(
+      '-e',
+      `NANOCLAW_QMD_XDG_CONFIG_HOME=${path.join(QMD_HOST_DIR, 'xdg-config')}`,
+    );
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
@@ -381,7 +552,27 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(input));
+    // Allow per-group or global model override via .env keys.
+    // Per-group key wins: NANOCLAW_MODEL_<UPPER_FOLDER_WITH_UNDERSCORES>
+    // Falls back to NANOCLAW_MODEL_DEFAULT if no per-group override.
+    // Read via readEnvFile so secrets stay out of process.env.
+    let effectiveInput = input;
+    if (!effectiveInput.model) {
+      const groupKey =
+        'NANOCLAW_MODEL_' +
+        group.folder.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const envValues = readEnvFile([groupKey, 'NANOCLAW_MODEL_DEFAULT']);
+      const override = envValues[groupKey] || envValues.NANOCLAW_MODEL_DEFAULT;
+      if (override) {
+        effectiveInput = { ...effectiveInput, model: override };
+        logger.info(
+          { group: group.folder, model: override },
+          'Model override applied',
+        );
+      }
+    }
+
+    container.stdin.write(JSON.stringify(effectiveInput));
     container.stdin.end();
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive

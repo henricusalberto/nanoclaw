@@ -145,7 +145,14 @@ export class TelegramChannel implements Channel {
         if (TELEGRAM_BOT_COMMANDS.has(cmd)) return;
       }
 
-      const chatJid = `tg:${ctx.chat.id}`;
+      // For Telegram forum groups, each topic is registered with its own JID
+      // (e.g. tg:-100...:topic:14). The General topic has no message_thread_id
+      // and is registered as tg:-100... without a suffix. Build the chatJid
+      // accordingly so router lookups hit the right group registration.
+      const threadId = ctx.message.message_thread_id;
+      const chatJid = threadId
+        ? `tg:${ctx.chat.id}:topic:${threadId}`
+        : `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -155,7 +162,6 @@ export class TelegramChannel implements Channel {
         'Unknown';
       const sender = ctx.from?.id.toString() || '';
       const msgId = ctx.message.message_id.toString();
-      const threadId = ctx.message.message_thread_id;
 
       const replyTo = ctx.message.reply_to_message;
       const replyToMessageId = replyTo?.message_id?.toString();
@@ -252,7 +258,10 @@ export class TelegramChannel implements Channel {
       placeholder: string,
       opts?: { fileId?: string; filename?: string },
     ) => {
-      const chatJid = `tg:${ctx.chat.id}`;
+      const threadId = ctx.message.message_thread_id;
+      const chatJid = threadId
+        ? `tg:${ctx.chat.id}:topic:${threadId}`
+        : `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
 
@@ -283,6 +292,7 @@ export class TelegramChannel implements Channel {
           content,
           timestamp,
           is_from_me: false,
+          thread_id: threadId ? threadId.toString() : undefined,
         });
       };
 
@@ -384,9 +394,16 @@ export class TelegramChannel implements Channel {
     }
 
     try {
-      const numericId = jid.replace(/^tg:/, '');
-      const options = threadId
-        ? { message_thread_id: parseInt(threadId, 10) }
+      // Parse jid into chat id + optional topic id.
+      // Forum topics are encoded as `tg:<chat_id>:topic:<thread_id>`.
+      // Plain chats / General topic are `tg:<chat_id>`.
+      const stripped = jid.replace(/^tg:/, '');
+      const topicMatch = stripped.match(/^(-?\d+):topic:(\d+)$/);
+      const numericId = topicMatch ? topicMatch[1] : stripped;
+      const jidThreadId = topicMatch ? topicMatch[2] : undefined;
+      const effectiveThreadId = threadId ?? jidThreadId;
+      const options = effectiveThreadId
+        ? { message_thread_id: parseInt(effectiveThreadId, 10) }
         : {};
 
       // Telegram has a 4096 character limit per message — split if needed
@@ -404,7 +421,7 @@ export class TelegramChannel implements Channel {
         }
       }
       logger.info(
-        { jid, length: text.length, threadId },
+        { jid, length: text.length, threadId: effectiveThreadId },
         'Telegram message sent',
       );
     } catch (err) {

@@ -2,6 +2,11 @@ export interface AdditionalMount {
   hostPath: string; // Absolute path on host (supports ~ for home)
   containerPath?: string; // Optional — defaults to basename of hostPath. Mounted at /workspace/extra/{value}
   readonly?: boolean; // Default: true for safety
+  // If true, mount lands at the resolved host path inside the container
+  // (instead of /workspace/extra/...). Used for backwards compatibility with
+  // scripts that hardcode absolute host paths (e.g. OpenClaw scripts).
+  // Still validated against the allowlist — only the destination changes.
+  mountAtHostPath?: boolean;
 }
 
 /**

@@ -41,6 +41,18 @@ export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
+// QMD integration: when these paths exist on the host, container-runner mounts
+// them at the same absolute paths inside the container so the qmd index's
+// absolute file references resolve, and the agent runner spawns `qmd mcp` as
+// a stdio MCP server (avoiding the HTTP MCP transport, which malforms array
+// and number parameters in the current SDK version).
+export const QMD_HOST_DIR =
+  process.env.QMD_HOST_DIR ||
+  path.join(HOME_DIR, '.openclaw', 'agents', 'main', 'qmd');
+export const QMD_WORKSPACE_DIR =
+  process.env.QMD_WORKSPACE_DIR ||
+  path.join(HOME_DIR, '.openclaw', 'workspace');
+
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
 export const CONTAINER_TIMEOUT = parseInt(

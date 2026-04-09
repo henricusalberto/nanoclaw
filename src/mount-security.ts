@@ -352,11 +352,26 @@ export function validateAdditionalMounts(
     const result = validateMount(mount, isMain);
 
     if (result.allowed) {
+      // Always emit the canonical /workspace/extra/<name> mount so that the
+      // agent-runner's discovery logic (which scans /workspace/extra/) and
+      // CLAUDE.md auto-loading keep working.
       validatedMounts.push({
         hostPath: result.realHostPath!,
         containerPath: `/workspace/extra/${result.resolvedContainerPath}`,
         readonly: result.effectiveReadonly!,
       });
+
+      // mountAtHostPath: backwards-compat — also mount at the resolved real
+      // host path verbatim, so scripts that hardcode absolute host paths
+      // (e.g. OpenClaw scripts referencing /Users/<user>/.openclaw/...)
+      // work inside the container unchanged. Same source, two destinations.
+      if (mount.mountAtHostPath) {
+        validatedMounts.push({
+          hostPath: result.realHostPath!,
+          containerPath: result.realHostPath!,
+          readonly: result.effectiveReadonly!,
+        });
+      }
 
       logger.debug(
         {

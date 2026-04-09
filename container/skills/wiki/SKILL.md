@@ -47,7 +47,7 @@ The user drops a source: a URL, PDF path, image, screenshot, pasted article, or 
    - Create or update an entity page for each major person, product, company mentioned.
    - Create or update concept pages for frameworks, methods, ideas introduced.
    - Update related "Things tried" or "Things to try" entries if relevant.
-   - Add cross-references (`[[wiki-link]]` or `[Title](relative/path.md)`) bidirectionally.
+   - Add cross-references using `[[wiki-link]]` style bidirectionally (every cross-reference should exist on both sides — A links to B, B links back to A).
    - Flag contradictions with prior wiki content explicitly. Do not silently overwrite.
 
 5. **Update `wiki/index.md`** — add new pages under their category, update one-line summaries for changed pages.
@@ -68,7 +68,7 @@ The user asks a question. Steps:
 1. Read `wiki/index.md` first to find relevant pages by category.
 2. If the index is insufficient, grep `wiki/` for keywords.
 3. Read the relevant pages fully (not just snippets).
-4. Synthesize an answer with **citations** — link every claim to its source page using `[Title](relative/path.md)`.
+4. Synthesize an answer with **citations** — link every claim to its source page using `[[page-name]]` style.
 5. If the answer reveals a gap or pattern worth keeping, offer to file the answer back as a new wiki page (this is how the wiki compounds).
 6. For non-trivial queries, append a `## [YYYY-MM-DD] query | <topic>` entry to `wiki/log.md` with a one-line summary.
 
@@ -107,7 +107,7 @@ Don't auto-fix anything that requires Maurizio's judgment. Auto-fix only mechani
   sources: [filename1.pdf, filename2.md]
   ---
   ```
-- **Cross-references** as inline markdown links with relative paths so they work in any markdown viewer.
+- **Cross-references** use Obsidian wiki-link style: `[[page-name]]` or `[[page-name|Display Text]]`. The wiki is read in Obsidian, so wiki-links give live backlinks, graph view, and refactor-safety. Use the page's filename without the `.md` extension. If two pages share a basename, use the relative path: `[[businesses/daily-sip]]`.
 - **No em dashes** — Maurizio dislikes them. Use commas, colons, or periods.
 
 ## Anti-patterns

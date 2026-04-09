@@ -1,77 +1,103 @@
 ---
 name: qmd
-description: Search past conversations and documentation. Use when users ask about things mentioned before, past discussions, or need context from history.
-allowed-tools: Bash(npx qmd:*), Grep, Glob, Read
+description: Search past conversations, memory, and documentation across the indexed corpus. Use when users ask about things mentioned before, past discussions, or need context from history.
+allowed-tools: mcp__nanoclaw__qmd_search, mcp__nanoclaw__qmd_get, mcp__nanoclaw__qmd_status, Grep, Glob, Read
 ---
 
-# QMD - Conversation Search
+# QMD - Conversation & Memory Search
 
-Search past conversations and documentation in the groups directory.
+QMD indexes ~5,992 markdown documents on the host: groups, businesses, memory, sessions, skills, docs, systems. Use it whenever you need context from past conversations or stored knowledge.
 
-## MCP Tools (Preferred)
+## Tools
 
-QMD MCP server runs on the host at `http://host.docker.internal:8182/mcp`.
+NanoClaw exposes three wrapper tools that take simple, flat parameters:
 
-Available tools:
-- `mcp__qmd__query` - Search with lex/vec/hyde queries
-- `mcp__qmd__get` - Retrieve document by path or docid
-- `mcp__qmd__multi_get` - Batch retrieve by glob pattern
-- `mcp__qmd__status` - Check index health
+- `mcp__nanoclaw__qmd_search` — search the index
+- `mcp__nanoclaw__qmd_get` — retrieve one document by path or docid
+- `mcp__nanoclaw__qmd_status` — show index health
 
-Example query:
-```json
-{
-  "searches": [
-    { "type": "lex", "query": "search term" },
-    { "type": "vec", "query": "natural language question" }
-  ],
-  "collections": ["groups", "businesses", "memory"],
-  "limit": 10
-}
+The upstream `mcp__qmd__*` tools are intentionally NOT registered here. Their schemas are misleading and the model emits malformed input every call. Use the wrappers — same backend, clean interface.
+
+## qmd_search
+
+Single-query search (most common):
+```
+qmd_search(query: "rate limiter token bucket")
 ```
 
-Available collections:
-- `groups` — NanoClaw group memory and CLAUDE.md files
-- `businesses` — Business documents (Revive Plus, Pinterest, Coaching, etc.)
-- `memory` — OpenClaw historical memory
-- `skills` / `docs` / `systems` — Reference material
-
-## CLI Fallback
-
-If MCP tools are unavailable, use the QMD CLI directly:
-
-```bash
-# Keyword search
-npx qmd search "search term" -c groups
-
-# Semantic search (requires embeddings)
-npx qmd vsearch "natural language question" -c groups,businesses
-
-# Hybrid search with reranking (best quality)
-npx qmd query "question" -c groups
+Semantic search (use a natural-language question):
+```
+qmd_search(query: "how does the rate limiter handle bursts", type: "vec")
 ```
 
-## Fallback: Direct File Search
+Two sub-queries for higher recall (lex + vec is the workhorse):
+```
+qmd_search(
+  query: "connection pool timeout",
+  type: "lex",
+  second_query: "why do database connections time out under load",
+  second_type: "vec"
+)
+```
 
-If QMD isn't available at all, search conversation files directly:
+Scope to specific collections (comma-separated string):
+```
+qmd_search(query: "Pinterest experiment", collections: "businesses-main,memory-dir-main", limit: 5)
+```
+
+Available collections: `groups`, `businesses-main`, `memory-dir-main`, `memory-root-main`, `sessions-main`, `skills-main`, `docs-main`, `systems-main`, `pinterest-main`, `workspace-root`. Omit `collections` to search everything.
+
+### Query types
+
+- **lex** — BM25 keyword search. Fast, exact. Supports `"phrases"` and `-negation`. Default.
+- **vec** — Semantic vector search. Pass a natural-language question.
+- **hyde** — Hypothetical document. Pass a 50-100 word passage written as if it were the answer. Strongest for nuanced topics.
+
+### Best-recall pattern
+
+For non-trivial questions, combine lex + vec:
+```
+qmd_search(
+  query: "\"connection pool\" timeout -redis",
+  type: "lex",
+  second_query: "why do database connections time out under load",
+  second_type: "vec",
+  intent: "performance investigation, not configuration docs"
+)
+```
+
+`intent` doesn't search on its own — it disambiguates the query and improves snippet selection.
+
+## qmd_get
+
+Fetch one document from search results:
+```
+qmd_get(file: "memory/2026-04-02.md")
+qmd_get(file: "#abc123")
+qmd_get(file: "memory/long-doc.md", fromLine: 100, maxLines: 50)
+```
+
+## qmd_status
+
+```
+qmd_status()
+```
+
+## Fallback: direct file search
+
+If the wrappers ever fail, search the workspace directly:
 
 ```bash
-# Find conversations containing a term
 grep -r "term" /workspace/group/conversations/
-
-# List recent conversations
 ls -lt /workspace/group/conversations/ | head -10
 ```
 
-## Conversation Files Location
+Conversations: `/workspace/group/conversations/*.md`. Group memory: `/workspace/group/CLAUDE.md`. Indexed source files (read-only): `/Users/kimbehnke/.openclaw/workspace/`.
 
-- Conversations: `/workspace/group/conversations/*.md`
-- Documentation: `/workspace/group/docs/*.md`
-- Group memory: `/workspace/group/CLAUDE.md`
-
-## When to Use
+## When to use QMD
 
 - User asks "what did we discuss about X"
 - User mentions something from a past conversation
 - Need context from previous sessions
-- Looking up decisions or preferences mentioned before
+- Looking up decisions, preferences, or facts mentioned before
+- Searching across multiple groups/businesses

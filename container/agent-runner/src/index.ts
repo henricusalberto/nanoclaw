@@ -33,6 +33,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  model?: string;
 }
 
 interface ContainerOutput {
@@ -158,8 +159,13 @@ function getSessionSummary(
 
 /**
  * Archive the full transcript to conversations/ before compaction.
+ * For main groups, also auto-flush a bare daily memory file at
+ * /workspace/global/memory/YYYY-MM-DD.md (OpenClaw-compatible path).
  */
-function createPreCompactHook(assistantName?: string): HookCallback {
+function createPreCompactHook(
+  assistantName?: string,
+  isMain?: boolean,
+): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preCompact = input as PreCompactHookInput;
     const transcriptPath = preCompact.transcript_path;
@@ -197,6 +203,35 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       fs.writeFileSync(filePath, markdown);
 
       log(`Archived conversation to ${filePath}`);
+
+      // Auto-flush to OpenClaw-compatible daily memory file (main group only).
+      // Appends to bare YYYY-MM-DD.md so multiple compactions in one day stack.
+      if (isMain) {
+        try {
+          const memoryDir = '/workspace/global/memory';
+          fs.mkdirSync(memoryDir, { recursive: true });
+          const memoryFile = path.join(memoryDir, `${date}.md`);
+          const header = `\n## Auto-flush ${new Date().toISOString()} — ${summary || 'session'}\n\n`;
+          const lastN = messages.slice(-20);
+          const body = lastN
+            .map((m) => {
+              const sender =
+                m.role === 'user' ? 'User' : assistantName || 'Assistant';
+              const text =
+                m.content.length > 1000
+                  ? m.content.slice(0, 1000) + '...'
+                  : m.content;
+              return `**${sender}**: ${text}`;
+            })
+            .join('\n\n');
+          fs.appendFileSync(memoryFile, header + body + '\n');
+          log(`Auto-flushed memory to ${memoryFile}`);
+        } catch (err) {
+          log(
+            `Failed to auto-flush memory: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     } catch (err) {
       log(
         `Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`,
@@ -439,6 +474,7 @@ async function runQuery(
     prompt: stream,
     options: {
       cwd: '/workspace/group',
+      ...(containerInput.model && { model: containerInput.model }),
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
@@ -469,7 +505,6 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__qmd__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -485,14 +520,16 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
-        qmd: {
-          type: 'http',
-          url: 'http://host.docker.internal:8182/mcp',
-        },
+        // QMD is exposed via wrapper tools in nanoclaw's own stdio MCP server
+        // (see ipc-mcp-stdio.ts: qmd_search/qmd_get/qmd_status). We do NOT
+        // register qmd's upstream MCP server directly — its tool description
+        // misleads the model into emitting array/number parameters as
+        // stringified JSON, which the qmd server then rejects. The wrapper
+        // exposes a clean schema and forwards properly-typed JSON to qmd.
       },
       hooks: {
         PreCompact: [
-          { hooks: [createPreCompactHook(containerInput.assistantName)] },
+          { hooks: [createPreCompactHook(containerInput.assistantName, containerInput.isMain)] },
         ],
       },
     },
@@ -698,6 +735,7 @@ async function main(): Promise<void> {
         prompt: trimmedPrompt,
         options: {
           cwd: '/workspace/group',
+          ...(containerInput.model && { model: containerInput.model }),
           resume: sessionId,
           systemPrompt: undefined,
           allowedTools: [],
@@ -706,7 +744,7 @@ async function main(): Promise<void> {
           allowDangerouslySkipPermissions: true,
           settingSources: ['project', 'user'] as const,
           hooks: {
-            PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+            PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName, containerInput.isMain)] }],
           },
         },
       })) {

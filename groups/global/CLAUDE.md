@@ -6,9 +6,11 @@ Your full personality and extended guidelines are in `soul.md`. Read it when you
 
 User context (who Maurizio is, his businesses, preferences) is in `user-context.md`. Read it when context about the user would help.
 
-Operational memory (lessons learned, system state, business status) is in `memories.md`. Read it when business or system context is needed.
+Operational memory (lessons learned, system state, business status) is in `MEMORY.md`. Read it when business or system context is needed. It is synthesized daily at 23:00 CET from recent memory files. Max 80 lines.
 
-Historical daily memory files from your previous system are in `daily-memories/`. Refer to them when you need context about past events, decisions, or observations from before April 2026.
+Daily memory files live in `memory/YYYY-MM-DD*.md`. Today's files are loaded at session startup. Files older than 14 days are moved to `memory/archive/` by the weekly cleanup cron but remain searchable. See `memory/README.md` for the full format.
+
+When you complete significant work in a session, write a memory file immediately — don't wait for `/wrap`. Use `memory/YYYY-MM-DD-<topic-slug>.md` (CET date, short slug). Format and conventions are in `memory/README.md`. The `/wrap` skill handles end-of-session wrap-up.
 
 ## Core Behavior
 

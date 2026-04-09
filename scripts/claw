@@ -286,6 +286,7 @@ def main():
     parser.add_argument("--runtime", choices=["docker", "container"],
                         help="Container runtime (default: auto-detect)")
     parser.add_argument("--image", default=IMAGE, help=f"Container image (default: {IMAGE})")
+    parser.add_argument("--model", help="Model ID to pass to the SDK (e.g. claude-sonnet-4-6, claude-opus-4-6). Defaults to whatever the SDK picks.")
     parser.add_argument("--list-groups", action="store_true", help="List registered groups and exit")
     parser.add_argument("--raw", action="store_true", help="Print raw JSON output")
     parser.add_argument("--timeout", type=int, default=300, metavar="SECS",
@@ -363,6 +364,8 @@ def main():
     if args.session:
         payload["sessionId"] = args.session
         payload["resumeAt"] = "latest"
+    if args.model:
+        payload["model"] = args.model
 
     print(f"[{group_name or jid}] running via {runtime}...", file=sys.stderr)
     run_container(runtime, args.image, payload,

@@ -7,6 +7,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
@@ -697,6 +698,233 @@ server.tool(
     }
 
     throw new Error(`Unknown action: ${action}`);
+  },
+);
+
+// ─── qmd_search / qmd_get / qmd_status ───────────────────────────────────────
+//
+// Two upstream qmd issues forced this wrapper into existence:
+//
+// 1. The qmd MCP `query` tool's description embeds standalone JSON-array
+//    literal examples (`[{ "type": "lex", "query": "..." }]`) without
+//    showing them as values of the `searches` field. The model reads these
+//    code blocks and consistently emits parameters as stringified JSON
+//    instead of arrays/numbers, which the qmd server then rejects. The
+//    schema is correct; only the description misleads. The bug is not
+//    transport-specific — stdio MCP exhibits the same behavior.
+//
+// 2. The qmd HTTP MCP server's `query` implementation returns
+//    `"database disk image is malformed"` for any call that uses the
+//    `collections` filter. The same query routed through the `qmd search`
+//    CLI succeeds. So even with a corrected wrapper sending proper JSON
+//    over MCP, collection-scoped queries fail at the server.
+//
+// Fix: skip the qmd MCP layer entirely and shell out to the `qmd` CLI
+// inside the container. The CLI has all the working code paths (search,
+// get, status) and supports `--json` output. The container/build.sh image
+// installs `@tobilu/qmd` globally, and src/container-runner.ts bind-mounts
+// the host's qmd cache + indexed workspace at the same absolute paths so
+// the CLI can read the existing 5,992-doc index without re-indexing.
+
+function qmdCliEnv(): Record<string, string> {
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    HOME: process.env.HOME ?? '/home/node',
+  };
+  if (process.env.NANOCLAW_QMD_XDG_CACHE_HOME) {
+    env.XDG_CACHE_HOME = process.env.NANOCLAW_QMD_XDG_CACHE_HOME;
+  }
+  if (process.env.NANOCLAW_QMD_XDG_CONFIG_HOME) {
+    env.XDG_CONFIG_HOME = process.env.NANOCLAW_QMD_XDG_CONFIG_HOME;
+  }
+  return env;
+}
+
+function runQmdCli(
+  args: string[],
+  timeoutMs = 30_000,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('qmd', args, {
+      env: qmdCliEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill('SIGTERM');
+    }, timeoutMs);
+    child.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Failed to spawn qmd: ${err.message}`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (killed) {
+        reject(new Error(`qmd timed out after ${timeoutMs}ms`));
+        return;
+      }
+      resolve({ stdout, stderr, code: code ?? -1 });
+    });
+  });
+}
+
+function coerceNumber(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  if (typeof v === 'number') return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function coerceList(v: unknown): string[] | undefined {
+  if (v == null || v === '') return undefined;
+  if (Array.isArray(v)) return v.map(String).filter(Boolean);
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+      } catch {
+        /* fall through to comma split */
+      }
+    }
+    return trimmed
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return undefined;
+}
+
+interface QmdSearchResult {
+  docid: string;
+  score: number;
+  file: string;
+  title?: string;
+  snippet?: string;
+}
+
+function formatSearchResults(json: string): string {
+  let parsed: QmdSearchResult[];
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return json.trim() || 'No results.';
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return 'No results.';
+  }
+  return parsed
+    .map((r) => {
+      const score = typeof r.score === 'number' ? Math.round(r.score * 100) : '?';
+      const title = r.title ? ` — ${r.title}` : '';
+      const snippet = r.snippet ? `\n${r.snippet}` : '';
+      return `${r.docid}  ${score}%  ${r.file}${title}${snippet}`;
+    })
+    .join('\n\n');
+}
+
+server.tool(
+  'qmd_search',
+  'Search the QMD index of ~5,992 markdown documents (groups, businesses, memory, sessions, skills, docs, systems, pinterest). BM25 keyword search — fast and exact. Pass plain string parameters. Returns ranked results with snippets.',
+  {
+    query: z
+      .string()
+      .describe(
+        'Search text. Supports phrase quoting and -negation, e.g.: `"connection pool" timeout -redis`',
+      ),
+    collections: z
+      .string()
+      .optional()
+      .describe(
+        'Comma-separated collections to filter by (e.g. "memory-dir-main,sessions-main,businesses-main"). Omit to search all collections.',
+      ),
+    limit: z
+      .union([z.number(), z.string()])
+      .optional()
+      .describe('Maximum results to return. Default 10.'),
+  },
+  async (args) => {
+    const cliArgs: string[] = ['search', args.query];
+    const collections = coerceList(args.collections);
+    if (collections) {
+      for (const c of collections) {
+        cliArgs.push('-c', c);
+      }
+    }
+    const limit = coerceNumber(args.limit);
+    cliArgs.push('-n', String(limit ?? 10));
+    cliArgs.push('--json');
+
+    const { stdout, stderr, code } = await runQmdCli(cliArgs);
+    if (code !== 0) {
+      throw new Error(
+        `qmd search failed (exit ${code}): ${stderr.trim() || stdout.trim()}`,
+      );
+    }
+    return {
+      content: [
+        { type: 'text' as const, text: formatSearchResults(stdout) },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'qmd_get',
+  'Retrieve a single document from the QMD index by file path (qmd:// URI) or docid (#abc123). Supports line offsets via "file:line" syntax.',
+  {
+    file: z
+      .string()
+      .describe(
+        'File path, qmd:// URI, or docid (#abc123). Append ":N" to start at line N.',
+      ),
+    maxLines: z
+      .union([z.number(), z.string()])
+      .optional()
+      .describe('Maximum lines to return.'),
+  },
+  async (args) => {
+    const cliArgs: string[] = ['get', args.file];
+    const maxLines = coerceNumber(args.maxLines);
+    if (maxLines != null) {
+      cliArgs.push('-l', String(maxLines));
+    }
+    const { stdout, stderr, code } = await runQmdCli(cliArgs);
+    if (code !== 0) {
+      throw new Error(
+        `qmd get failed (exit ${code}): ${stderr.trim() || stdout.trim()}`,
+      );
+    }
+    return {
+      content: [
+        { type: 'text' as const, text: stdout.trim() || '(empty document)' },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'qmd_status',
+  'Show QMD index status: collections, document counts, index health.',
+  {},
+  async () => {
+    const { stdout, stderr, code } = await runQmdCli(['status']);
+    if (code !== 0) {
+      throw new Error(
+        `qmd status failed (exit ${code}): ${stderr.trim() || stdout.trim()}`,
+      );
+    }
+    return { content: [{ type: 'text' as const, text: stdout.trim() }] };
   },
 );
 
