@@ -225,14 +225,27 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
-    if (needsCopy) {
+    // Compare newest mtime across the entire source tree, not just index.ts.
+    // A previous version only checked index.ts, which silently missed
+    // newly-added sibling files (e.g. ipc-mcp-stdio.ts) and left groups
+    // running stale agent-runner code with missing MCP tools.
+    const newestMtime = (dir: string): number => {
+      let max = 0;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        const m = entry.isDirectory()
+          ? newestMtime(p)
+          : fs.statSync(p).mtimeMs;
+        if (m > max) max = m;
+      }
+      return max;
+    };
+    const srcMtime = newestMtime(agentRunnerSrc);
+    const cachedMtime = fs.existsSync(groupAgentRunnerDir)
+      ? newestMtime(groupAgentRunnerDir)
+      : 0;
+    if (srcMtime > cachedMtime) {
+      fs.rmSync(groupAgentRunnerDir, { recursive: true, force: true });
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
   }
