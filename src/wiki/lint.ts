@@ -200,8 +200,12 @@ function checkPage(
   // broken-wikilink
   const links = extractWikiLinks(page.body);
   for (const target of links) {
-    if (!pagesByBasename.has(target) && !pagesById.has(`entity.${target}`) &&
-        !pagesById.has(`concept.${target}`) && !pagesById.has(`synthesis.${target}`)) {
+    if (
+      !pagesByBasename.has(target) &&
+      !pagesById.has(`entity.${target}`) &&
+      !pagesById.has(`concept.${target}`) &&
+      !pagesById.has(`synthesis.${target}`)
+    ) {
       issues.push({
         code: 'broken-wikilink',
         severity: 'warning',
@@ -307,7 +311,10 @@ function checkDuplicateIds(pages: PageRecord[]): LintIssue[] {
         code: 'duplicate-id',
         severity: 'error',
         pagePath: p.relativePath,
-        message: `duplicate id \`${id}\` shared with: ${list.filter((x) => x !== p).map((x) => x.relativePath).join(', ')}`,
+        message: `duplicate id \`${id}\` shared with: ${list
+          .filter((x) => x !== p)
+          .map((x) => x.relativePath)
+          .join(', ')}`,
       });
     }
   }
@@ -316,12 +323,11 @@ function checkDuplicateIds(pages: PageRecord[]): LintIssue[] {
 
 function checkClaimConflicts(pages: PageRecord[]): LintIssue[] {
   const issues: LintIssue[] = [];
-  const byClaimId = new Map<
-    string,
-    { page: PageRecord; claim: WikiClaim }[]
-  >();
+  const byClaimId = new Map<string, { page: PageRecord; claim: WikiClaim }[]>();
   for (const p of pages) {
-    const claims = Array.isArray(p.frontmatter.claims) ? p.frontmatter.claims : [];
+    const claims = Array.isArray(p.frontmatter.claims)
+      ? p.frontmatter.claims
+      : [];
     for (const claim of claims) {
       if (!claim.id) continue;
       const arr = byClaimId.get(claim.id) || [];

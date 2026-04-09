@@ -1,12 +1,9 @@
 /**
- * Wiki CLI entry point.
+ * Wiki CLI. Defaults to the wiki-inbox vault when no path is given.
  *
- * Usage:
- *   npx tsx src/wiki/cli.ts bridge [vault-path]
- *   npx tsx src/wiki/cli.ts compile [vault-path]   # not yet implemented
- *   npx tsx src/wiki/cli.ts lint [vault-path]      # not yet implemented
- *
- * Defaults to the wiki-inbox group's vault if no path provided.
+ *   npx tsx src/wiki/cli.ts bridge   # sync memory files into sources/
+ *   npx tsx src/wiki/cli.ts compile  # related blocks + caches
+ *   npx tsx src/wiki/cli.ts lint     # health checks
  */
 
 import path from 'path';
@@ -29,7 +26,9 @@ async function cmdBridge(vaultPath: string): Promise<void> {
   console.log(`  Errors:           ${result.errorCount}`);
   console.log(`  Duration:         ${result.durationMs}ms`);
   if (result.changedSourceIds.length > 0) {
-    console.log(`\nPending ingest marker dropped at .openclaw-wiki/pending-ingest.json`);
+    console.log(
+      `\nPending ingest marker dropped at .openclaw-wiki/pending-ingest.json`,
+    );
     console.log(`  ${result.changedSourceIds.length} source pages changed`);
     if (result.changedSourceIds.length <= 20) {
       for (const id of result.changedSourceIds) {
@@ -73,7 +72,9 @@ async function main(): Promise<void> {
       console.log(`\nReport: reports/lint.md`);
       if (result.issueCount > 0) {
         console.log('\nTop issue types:');
-        const sorted = Object.entries(result.byCode).sort((a, b) => b[1] - a[1]);
+        const sorted = Object.entries(result.byCode).sort(
+          (a, b) => b[1] - a[1],
+        );
         for (const [code, count] of sorted.slice(0, 5)) {
           if (count === 0) continue;
           console.log(`  ${code}: ${count}`);
@@ -92,8 +93,8 @@ async function main(): Promise<void> {
       console.log('');
       console.log('Commands:');
       console.log('  bridge   Sync memory files into wiki sources/');
-      console.log('  compile  Recompute related blocks + caches (TBD)');
-      console.log('  lint     Run health checks (TBD)');
+      console.log('  compile  Recompute related blocks + agent-digest cache');
+      console.log('  lint     Run structural health checks');
       console.log('');
       console.log('Default vault: ' + DEFAULT_VAULT);
       return;

@@ -26,9 +26,11 @@
   },
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",
+    "@types/js-yaml": "^4.0.9",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
-    "grammy": "^1.39.3"
+    "grammy": "^1.39.3",
+    "js-yaml": "^4.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",

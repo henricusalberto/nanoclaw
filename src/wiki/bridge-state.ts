@@ -1,27 +1,17 @@
 /**
- * Persistent sync state for the wiki bridge.
- *
- * Path: <vaultPath>/.openclaw-wiki/source-sync.json
- *
- * Direct port of OpenClaw's `extensions/memory-wiki/src/source-sync-state.ts`.
- * The schema is identical so vaults round-trip cleanly between the two tools.
- *
- * Each entry tracks one bridged source file:
- *   syncKey            = sha1(absolute source path) — stable id
- *   group              = "bridge" | "unsafe-local" — partition (we use bridge)
- *   pagePath           = relative path inside the vault to the bridge page
- *   sourcePath         = absolute path to the original source file
- *   sourceUpdatedAtMs  = mtime in ms (cheap freshness check)
- *   sourceSize         = byte size (cheap freshness check)
- *   renderFingerprint  = sha1 of the template inputs — when the rendering
- *                        template changes, this fingerprint changes and
- *                        every page is re-rendered
+ * Persistent sync state for the wiki bridge. Schema-compatible with
+ * OpenClaw's source-sync-state.ts so vaults round-trip cleanly.
  */
 
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+import { atomicWriteFile, readJsonOrDefault } from './fs-util.js';
+import { vaultPaths } from './paths.js';
+
+// "bridge" is the only group NanoClaw produces. The union exists for
+// OpenClaw on-disk JSON compat — leave the second variant in place.
 export type BridgeGroup = 'bridge' | 'unsafe-local';
 
 export interface SourceSyncEntry {
@@ -38,10 +28,10 @@ export interface SourceSyncState {
   entries: Record<string, SourceSyncEntry>;
 }
 
-const STATE_RELATIVE_PATH = '.openclaw-wiki/source-sync.json';
+const EMPTY_STATE: SourceSyncState = { version: 1, entries: {} };
 
 export function getSourceSyncStatePath(vaultPath: string): string {
-  return path.join(vaultPath, STATE_RELATIVE_PATH);
+  return vaultPaths(vaultPath).sourceSync;
 }
 
 export function resolveArtifactKey(absoluteSourcePath: string): string {
@@ -49,36 +39,28 @@ export function resolveArtifactKey(absoluteSourcePath: string): string {
 }
 
 export function readSourceSyncState(vaultPath: string): SourceSyncState {
-  const p = getSourceSyncStatePath(vaultPath);
-  if (!fs.existsSync(p)) {
-    return { version: 1, entries: {} };
+  const parsed = readJsonOrDefault<SourceSyncState>(
+    getSourceSyncStatePath(vaultPath),
+    EMPTY_STATE,
+  );
+  if (
+    typeof parsed === 'object' &&
+    parsed !== null &&
+    typeof parsed.entries === 'object'
+  ) {
+    return parsed;
   }
-  try {
-    const raw = fs.readFileSync(p, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof parsed.entries === 'object'
-    ) {
-      return parsed as SourceSyncState;
-    }
-  } catch {
-    // Corrupt state — treat as empty, self-healing on next write.
-  }
-  return { version: 1, entries: {} };
+  return { ...EMPTY_STATE, entries: {} };
 }
 
 export function writeSourceSyncState(
   vaultPath: string,
   state: SourceSyncState,
 ): void {
-  const p = getSourceSyncStatePath(vaultPath);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  // Atomic write via temp+rename
-  const temp = `${p}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(state, null, 2) + '\n');
-  fs.renameSync(temp, p);
+  atomicWriteFile(
+    getSourceSyncStatePath(vaultPath),
+    JSON.stringify(state, null, 2) + '\n',
+  );
 }
 
 /**

@@ -1,16 +1,15 @@
 /**
- * Lightweight concept tag extraction from snippet text.
- *
- * Inspired by OpenClaw's `concept-vocabulary.ts` but simplified — we don't
- * carry a glossary or compound-token detector, just basic capitalized-noun
- * extraction with stoplist filtering.
- *
- * Used by the bridge to enrich source pages with auto-detected tags so
- * downstream synthesis can quickly identify which entities a memory mentions.
+ * Lightweight concept tag extraction from snippet text. Capitalized-noun
+ * extraction + hyphenated-identifier extraction + stoplist filter, ranked by
+ * frequency × length. No glossary, no NLP — just enough to enrich bridge
+ * source pages with hints about which entities a memory mentions.
  */
 
 const MAX_CONCEPT_TAGS = 8;
 const MIN_TAG_LENGTH = 3;
+
+const CAP_WORD_RE = /\b([A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)*)\b/g;
+const HYPHEN_RE = /\b([a-z][a-z0-9]+(?:-[a-z0-9]+){1,4})\b/g;
 
 const STOPWORDS = new Set([
   'the',
@@ -104,48 +103,49 @@ const STOPWORDS = new Set([
   'one',
   'two',
   'three',
-  'maurizio',
-  'janus',
 ]);
 
 /**
  * Extract concept tags from a snippet body. Returns up to MAX_CONCEPT_TAGS
- * normalized tag strings, ranked by frequency × length.
+ * normalized tag strings, ranked by frequency × log(length).
+ *
+ * @param text          The text to extract from
+ * @param extraStopwords  User-supplied stopwords (e.g. their own name) to add
+ *                        to the built-in list. Configurable via bridge.json.
  */
-export function deriveConceptTags(text: string): string[] {
+export function deriveConceptTags(
+  text: string,
+  extraStopwords?: string[],
+): string[] {
   const tagCounts = new Map<string, number>();
+  const stopwords =
+    extraStopwords && extraStopwords.length > 0
+      ? new Set([...STOPWORDS, ...extraStopwords.map((s) => s.toLowerCase())])
+      : STOPWORDS;
 
-  // Pass 1: capitalized words and phrases
-  const capWordRe = /\b([A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)*)\b/g;
+  CAP_WORD_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = capWordRe.exec(text)) !== null) {
+  while ((m = CAP_WORD_RE.exec(text)) !== null) {
     const phrase = m[1].trim();
     if (phrase.length < MIN_TAG_LENGTH) continue;
     const lower = phrase.toLowerCase();
-    if (STOPWORDS.has(lower)) continue;
+    if (stopwords.has(lower)) continue;
     if (/^\d+$/.test(phrase)) continue;
     const slug = lower.replace(/\s+/g, '-');
     tagCounts.set(slug, (tagCounts.get(slug) || 0) + 1);
   }
 
-  // Pass 2: hyphenated lowercase identifiers ("daily-sip", "facebook-ad-algorithm")
-  const hyphenRe = /\b([a-z][a-z0-9]+(?:-[a-z0-9]+){1,4})\b/g;
-  while ((m = hyphenRe.exec(text)) !== null) {
+  HYPHEN_RE.lastIndex = 0;
+  while ((m = HYPHEN_RE.exec(text)) !== null) {
     const slug = m[1];
     if (slug.length < MIN_TAG_LENGTH) continue;
-    if (STOPWORDS.has(slug)) continue;
+    if (stopwords.has(slug)) continue;
     tagCounts.set(slug, (tagCounts.get(slug) || 0) + 1);
   }
 
-  // Rank: frequency × log(length+1) — slight preference for longer phrases
-  const ranked = Array.from(tagCounts.entries())
-    .map(([tag, count]) => ({
-      tag,
-      score: count * Math.log(tag.length + 1),
-    }))
+  return Array.from(tagCounts.entries())
+    .map(([tag, count]) => ({ tag, score: count * Math.log(tag.length + 1) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, MAX_CONCEPT_TAGS)
     .map((entry) => entry.tag);
-
-  return ranked;
 }

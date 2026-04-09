@@ -434,6 +434,23 @@ async function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Sunsama: long-lived bearer token for the official remote MCP server.
+  // Stored in the OpenClaw-shared secrets dir so OpenClaw can read the same
+  // file. Injected as an env var so the agent-runner can register the HTTP
+  // MCP server with an Authorization header — never written to disk inside
+  // the container, never persisted in process.env on the host.
+  const sunsamaSecretFile = path.join(
+    os.homedir(),
+    '.openclaw',
+    'workspace',
+    'secrets',
+    'sunsama.env',
+  );
+  const sunsamaEnv = readEnvFile(['SUNSAMA_BEARER_TOKEN'], sunsamaSecretFile);
+  if (sunsamaEnv.SUNSAMA_BEARER_TOKEN) {
+    args.push('-e', `SUNSAMA_BEARER_TOKEN=${sunsamaEnv.SUNSAMA_BEARER_TOKEN}`);
+  }
+
   // QMD: tell the in-container agent runner where to find the qmd index/config
   // when it spawns `qmd mcp` as a stdio MCP server.
   if (fs.existsSync(QMD_HOST_DIR)) {
@@ -493,9 +510,7 @@ async function buildContainerArgs(
  * with a `.openclaw-wiki/` state directory. Errors are logged but never
  * propagated — bridge failures must not block container spawns.
  */
-async function maybeRunWikiBridgeSync(
-  group: RegisteredGroup,
-): Promise<void> {
+async function maybeRunWikiBridgeSync(group: RegisteredGroup): Promise<void> {
   const groupDir = resolveGroupFolderPath(group.folder);
   const vaultPath = path.join(groupDir, 'wiki');
   const stateDir = path.join(vaultPath, '.openclaw-wiki');

@@ -58,7 +58,9 @@ export interface CompileResult {
 // Page collection
 // =============================================================================
 
-function walkVault(vaultPath: string): { absPath: string; kind: WikiPageKind }[] {
+function walkVault(
+  vaultPath: string,
+): { absPath: string; kind: WikiPageKind }[] {
   const results: { absPath: string; kind: WikiPageKind }[] = [];
   for (const { dir, kind } of VAULT_DIRS) {
     const dirPath = path.join(vaultPath, dir);
@@ -127,7 +129,11 @@ function refreshRelatedBlocks(
     const parsed = parsedByPath.get(page.filePath);
     if (!parsed) continue;
 
-    const newBody = replaceManagedBlock(parsed.body, MANAGED_BLOCK_NAME, blockBody);
+    const newBody = replaceManagedBlock(
+      parsed.body,
+      MANAGED_BLOCK_NAME,
+      blockBody,
+    );
     if (newBody === parsed.body) continue;
 
     const newContent = serializeWikiPage(parsed.frontmatter, newBody);
@@ -158,7 +164,9 @@ function buildIndexBody(
       arr.push(p);
       byDir.set(dir, arr);
     }
-    for (const [dir, arr] of [...byDir].sort((a, b) => a[0].localeCompare(b[0]))) {
+    for (const [dir, arr] of [...byDir].sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    )) {
       lines.push(`### ${dir}/`);
       arr.sort((a, b) => a.title.localeCompare(b.title));
       for (const p of arr) {
@@ -175,10 +183,7 @@ function buildIndexBody(
   return lines.join('\n').trimEnd();
 }
 
-function refreshIndexes(
-  vaultPath: string,
-  summaries: PageSummary[],
-): number {
+function refreshIndexes(vaultPath: string, summaries: PageSummary[]): number {
   let count = 0;
 
   // Per-directory indexes
@@ -228,28 +233,31 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
   const startedAt = Date.now();
   const { summaries, parsedByPath } = collectPageSummaries(vaultPath);
 
-  const rewrittenCount = refreshRelatedBlocks(vaultPath, summaries, parsedByPath);
+  const rewrittenCount = refreshRelatedBlocks(
+    vaultPath,
+    summaries,
+    parsedByPath,
+  );
   const indexesRefreshed = refreshIndexes(vaultPath, summaries);
 
-  // Build agent-digest.json + claims.jsonl from the freshly-rewritten pages.
-  // Re-read frontmatter from disk so the digest reflects the post-related state.
-  const digestInputs: { filePath: string; relativePath: string; frontmatter: ReturnType<typeof parseWikiPage>['frontmatter'] }[] = [];
-  for (const summary of summaries) {
-    try {
-      const reparsed = readWikiPage(summary.filePath);
-      digestInputs.push({
+  // The related-block rewrite only touches the body — frontmatter in
+  // parsedByPath is still authoritative. Reuse it directly instead of
+  // re-reading every page from disk.
+  const digestInputs = summaries
+    .map((summary) => {
+      const parsed = parsedByPath.get(summary.filePath);
+      if (!parsed) return null;
+      return {
         filePath: summary.filePath,
         relativePath: summary.relativePath,
-        frontmatter: reparsed.frontmatter,
-      });
-    } catch {
-      // skip
-    }
-  }
+        frontmatter: parsed.frontmatter,
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
   const digest = buildAgentDigest(digestInputs);
   writeAgentDigest(vaultPath, digest);
-  const claimsLines = buildClaimsJsonlLines(digestInputs);
-  writeClaimsJsonl(vaultPath, claimsLines);
+  writeClaimsJsonl(vaultPath, buildClaimsJsonlLines(digestInputs));
 
   const result: CompileResult = {
     pageCount: summaries.length,

@@ -1,13 +1,13 @@
 /**
- * Wiki markdown utilities — frontmatter parsing, link extraction, managed blocks.
- *
- * Schema deliberately matches OpenClaw's `extensions/memory-wiki/src/markdown.ts`
- * so vaults built by NanoClaw are openable by the OpenClaw CLI without
- * conversion.
+ * Wiki markdown utilities — frontmatter parsing, link extraction, managed
+ * blocks. Schema matches OpenClaw's memory-wiki/markdown.ts so vaults are
+ * openable by the openclaw CLI without conversion.
  */
 
 import fs from 'fs';
 import path from 'path';
+
+import yaml from 'js-yaml';
 
 // =============================================================================
 // Types — match OpenClaw's WikiPageSummary contract.
@@ -69,165 +69,122 @@ export interface ParsedWikiPage {
 }
 
 // =============================================================================
-// Frontmatter parser — minimal YAML subset, no dependencies.
-//
-// Supports the constructs NanoClaw and OpenClaw actually use:
-//   key: scalar
-//   key: "double-quoted scalar"
-//   key: 'single-quoted scalar'
-//   key: [item, item, item]
-//   key:
-//     - item
-//     - "item with spaces"
-//     - "[[wiki-link]]"
-//   key: 0.7   (numbers)
-//   key: true  (booleans)
-//
-// Does NOT support nested objects (we use flat schema).
+// Frontmatter — js-yaml for full YAML 1.2 support including nested objects
+// in lists (required for the structured `claims:` schema).
 // =============================================================================
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
-function unquoteString(value: string): string {
-  const trimmed = value.trim();
-  if (
-    trimmed.length >= 2 &&
-    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'")))
-  ) {
-    return trimmed.slice(1, -1);
+function parseFrontmatterYaml(text: string): Record<string, unknown> {
+  try {
+    const parsed = yaml.load(text);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // graceful: malformed frontmatter shouldn't crash readers
   }
-  return trimmed;
+  return {};
 }
 
-function parseScalar(value: string): unknown {
-  const trimmed = value.trim();
-  if (trimmed === '') return '';
-  if (trimmed === 'true') return true;
-  if (trimmed === 'false') return false;
-  if (trimmed === 'null' || trimmed === '~') return null;
-  // Number
-  if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
-  if (/^-?\d+\.\d+$/.test(trimmed)) return parseFloat(trimmed);
-  // Inline array
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-    const inner = trimmed.slice(1, -1).trim();
-    if (inner === '') return [];
-    return inner.split(',').map((s) => unquoteString(s));
+function serializeFrontmatterYaml(obj: Record<string, unknown>): string {
+  // Strip undefineds — js-yaml emits "undefined" otherwise.
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) clean[k] = v;
   }
-  return unquoteString(trimmed);
-}
-
-function parseYamlSubset(yaml: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  const lines = yaml.split(/\r?\n/);
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.trim() === '' || line.trim().startsWith('#')) {
-      i++;
-      continue;
-    }
-    const match = line.match(/^([a-zA-Z_][\w-]*)\s*:\s*(.*)$/);
-    if (!match) {
-      i++;
-      continue;
-    }
-    const [, key, rawValue] = match;
-    if (rawValue.trim() === '') {
-      // Multiline list — collect indented `- item` lines
-      const items: string[] = [];
-      i++;
-      while (i < lines.length) {
-        const next = lines[i];
-        const itemMatch = next.match(/^\s+-\s+(.*)$/);
-        if (!itemMatch) break;
-        items.push(unquoteString(itemMatch[1]));
-        i++;
-      }
-      result[key] = items;
-    } else {
-      result[key] = parseScalar(rawValue);
-      i++;
-    }
-  }
-  return result;
-}
-
-function escapeYamlScalar(value: string): string {
-  // Quote if it contains special characters or starts with a structural marker.
-  if (value === '') return '""';
-  if (/[:#\[\]{}&*!|>'"%@`,]/.test(value) || /^[\s-]/.test(value)) {
-    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-  }
-  return value;
-}
-
-function serializeYamlSubset(obj: Record<string, unknown>): string {
-  const lines: string[] = [];
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === undefined) continue;
-    if (value === null) {
-      lines.push(`${key}: null`);
-      continue;
-    }
-    if (Array.isArray(value)) {
-      if (value.length === 0) {
-        lines.push(`${key}: []`);
-        continue;
-      }
-      lines.push(`${key}:`);
-      for (const item of value) {
-        if (typeof item === 'string') {
-          lines.push(`  - ${escapeYamlScalar(item)}`);
-        } else if (typeof item === 'object' && item !== null) {
-          // Inline JSON for object items (claims, evidence)
-          lines.push(`  - ${JSON.stringify(item)}`);
-        } else {
-          lines.push(`  - ${String(item)}`);
-        }
-      }
-      continue;
-    }
-    if (typeof value === 'object') {
-      // Inline JSON for nested objects
-      lines.push(`${key}: ${JSON.stringify(value)}`);
-      continue;
-    }
-    if (typeof value === 'string') {
-      lines.push(`${key}: ${escapeYamlScalar(value)}`);
-      continue;
-    }
-    lines.push(`${key}: ${String(value)}`);
-  }
-  return lines.join('\n');
+  return yaml
+    .dump(clean, {
+      lineWidth: -1, // never wrap (preserves wikilinks and long titles)
+      noRefs: true,
+      quotingType: '"',
+      forceQuotes: false,
+    })
+    .trimEnd();
 }
 
 // =============================================================================
 // Public API
 // =============================================================================
 
+/**
+ * Normalize array fields and claim structure so downstream code doesn't
+ * need defensive Array.isArray + claim.evidence checks everywhere.
+ */
+function normalizeFrontmatter(
+  fm: Record<string, unknown>,
+): WikiPageFrontmatter {
+  const out = { ...fm } as WikiPageFrontmatter;
+  for (const key of [
+    'sourceIds',
+    'contradictions',
+    'questions',
+    'bridgeAgentIds',
+  ] as const) {
+    if (!Array.isArray(out[key])) (out as Record<string, unknown>)[key] = [];
+  }
+  if (!Array.isArray(out.claims)) {
+    out.claims = [];
+  } else {
+    out.claims = out.claims.map((c: unknown) => normalizeClaim(c));
+  }
+  return out;
+}
+
+function normalizeClaim(raw: unknown): WikiClaim {
+  if (!raw || typeof raw !== 'object') {
+    return { text: String(raw ?? ''), evidence: [] };
+  }
+  const c = raw as Record<string, unknown>;
+  return {
+    ...(typeof c.id === 'string' && { id: c.id }),
+    text: typeof c.text === 'string' ? c.text : '',
+    ...(typeof c.status === 'string' && { status: c.status }),
+    ...(typeof c.confidence === 'number' && { confidence: c.confidence }),
+    evidence: Array.isArray(c.evidence)
+      ? (c.evidence as unknown[]).map((e) => normalizeEvidence(e))
+      : [],
+    ...(typeof c.updatedAt === 'string' && { updatedAt: c.updatedAt }),
+  };
+}
+
+function normalizeEvidence(raw: unknown): WikiClaimEvidence {
+  if (!raw || typeof raw !== 'object') {
+    return {};
+  }
+  const e = raw as Record<string, unknown>;
+  return {
+    ...(typeof e.sourceId === 'string' && { sourceId: e.sourceId }),
+    ...(typeof e.path === 'string' && { path: e.path }),
+    ...(typeof e.lines === 'string' && { lines: e.lines }),
+    ...(typeof e.weight === 'number' && { weight: e.weight }),
+    ...(typeof e.note === 'string' && { note: e.note }),
+    ...(typeof e.updatedAt === 'string' && { updatedAt: e.updatedAt }),
+  };
+}
+
 export function parseWikiPage(raw: string): ParsedWikiPage {
   const match = raw.match(FRONTMATTER_RE);
   if (!match) {
     return { frontmatter: {}, body: raw, raw };
   }
-  const frontmatter = parseYamlSubset(match[1]) as WikiPageFrontmatter;
+  const frontmatter = normalizeFrontmatter(parseFrontmatterYaml(match[1]));
   const body = match[2] ?? '';
   return { frontmatter, body, raw };
 }
 
 export function readWikiPage(filePath: string): ParsedWikiPage {
-  const raw = fs.readFileSync(filePath, 'utf-8');
-  return parseWikiPage(raw);
+  return parseWikiPage(fs.readFileSync(filePath, 'utf-8'));
 }
 
 export function serializeWikiPage(
   frontmatter: WikiPageFrontmatter,
   body: string,
 ): string {
-  const yaml = serializeYamlSubset(frontmatter as Record<string, unknown>);
-  return `---\n${yaml}\n---\n\n${body.replace(/^\n+/, '')}`;
+  const yamlStr = serializeFrontmatterYaml(
+    frontmatter as Record<string, unknown>,
+  );
+  return `---\n${yamlStr}\n---\n\n${body.replace(/^\n+/, '')}`;
 }
 
 export function writeWikiPage(
@@ -237,7 +194,6 @@ export function writeWikiPage(
 ): void {
   const content = serializeWikiPage(frontmatter, body);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  // Atomic write via temp+rename so partial files never appear
   const tempPath = `${filePath}.tmp`;
   fs.writeFileSync(tempPath, content);
   fs.renameSync(tempPath, filePath);
@@ -290,19 +246,24 @@ export function buildManagedBlockMarkers(name: string): {
   };
 }
 
+const managedBlockReCache = new Map<string, RegExp>();
+
 export function replaceManagedBlock(
   content: string,
   markerName: string,
   newBody: string,
 ): string {
   const { start, end } = buildManagedBlockMarkers(markerName);
-  const escaped = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const blockRe = new RegExp(`${escaped(start)}[\\s\\S]*?${escaped(end)}`);
+  let blockRe = managedBlockReCache.get(markerName);
+  if (!blockRe) {
+    const escaped = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    blockRe = new RegExp(`${escaped(start)}[\\s\\S]*?${escaped(end)}`);
+    managedBlockReCache.set(markerName, blockRe);
+  }
   const replacement = `${start}\n${newBody.trim()}\n${end}`;
   if (blockRe.test(content)) {
     return content.replace(blockRe, replacement);
   }
-  // No existing block — append at the end (with a leading section if appropriate)
   const trimmed = content.replace(/\s+$/, '');
   return `${trimmed}\n\n${replacement}\n`;
 }

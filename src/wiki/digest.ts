@@ -20,9 +20,6 @@
  * claims.jsonl: one JSON object per line, one per claim across the vault.
  */
 
-import fs from 'fs';
-import path from 'path';
-
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -31,17 +28,10 @@ import {
   isLowConfidence,
   isMissingEvidence,
   sortClaims,
-  CONTESTED_STATUSES,
 } from './claim-health.js';
-import {
-  parseWikiPage,
-  WikiClaim,
-  WikiPageFrontmatter,
-  WikiPageKind,
-} from './markdown.js';
-
-const DIGEST_PATH = '.openclaw-wiki/cache/agent-digest.json';
-const CLAIMS_JSONL_PATH = '.openclaw-wiki/cache/claims.jsonl';
+import { atomicWriteFile } from './fs-util.js';
+import { WikiClaim, WikiPageFrontmatter, WikiPageKind } from './markdown.js';
+import { vaultPaths } from './paths.js';
 
 interface DigestPageEntry {
   id: string;
@@ -267,7 +257,9 @@ export function buildClaimsJsonlLines(pages: PageInput[]): string[] {
         missingEvidence: isMissingEvidence(claim),
         evidence: claim.evidence,
         freshnessLevel: assessClaimFreshness(claim, fm.updatedAt),
-        ...(claim.updatedAt !== undefined && { lastTouchedAt: claim.updatedAt }),
+        ...(claim.updatedAt !== undefined && {
+          lastTouchedAt: claim.updatedAt,
+        }),
       };
       lines.push(JSON.stringify(line));
     }
@@ -280,21 +272,23 @@ export function buildClaimsJsonlLines(pages: PageInput[]): string[] {
 // =============================================================================
 
 export function writeAgentDigest(vaultPath: string, digest: AgentDigest): void {
-  const p = path.join(vaultPath, DIGEST_PATH);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(digest, null, 2) + '\n');
+  atomicWriteFile(
+    vaultPaths(vaultPath).agentDigest,
+    JSON.stringify(digest, null, 2) + '\n',
+  );
 }
 
 export function writeClaimsJsonl(vaultPath: string, lines: string[]): void {
-  const p = path.join(vaultPath, CLAIMS_JSONL_PATH);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+  atomicWriteFile(
+    vaultPaths(vaultPath).claimsJsonl,
+    lines.length > 0 ? lines.join('\n') + '\n' : '',
+  );
 }
 
 export function getDigestPath(vaultPath: string): string {
-  return path.join(vaultPath, DIGEST_PATH);
+  return vaultPaths(vaultPath).agentDigest;
 }
 
 export function getClaimsJsonlPath(vaultPath: string): string {
-  return path.join(vaultPath, CLAIMS_JSONL_PATH);
+  return vaultPaths(vaultPath).claimsJsonl;
 }
