@@ -1,0 +1,571 @@
+{
+  "meta": {
+    "token": "<YOUR_TOKEN>",
+    "account_id": "act_1400123811678069",
+    "page_id": "902125422992374",
+    "ig_user_id": "17841479960010364",
+    "pixel_id": "1865987104055028"
+  },
+  "campaign": {
+    "name": "Nightcap — Launch v4 Mar 3 2026",
+    "objective": "OUTCOME_SALES",
+    "start_time": 1741003200
+  },
+  "adsets": [
+    {
+      "code": "SP",
+      "name": "Social Parent",
+      "daily_budget_cents": 2500
+    },
+    {
+      "code": "FIT",
+      "name": "Fitness",
+      "daily_budget_cents": 2500
+    },
+    {
+      "code": "GN",
+      "name": "Girls Night",
+      "daily_budget_cents": 2500
+    },
+    {
+      "code": "BN",
+      "name": "Boys Night",
+      "daily_budget_cents": 2500
+    },
+    {
+      "code": "PRO",
+      "name": "Professionals",
+      "daily_budget_cents": 2500
+    },
+    {
+      "code": "HH",
+      "name": "Lifestyle",
+      "daily_budget_cents": 2500
+    },
+    {
+      "code": "BR",
+      "name": "Broad",
+      "daily_budget_cents": 2500
+    }
+  ],
+  "targeting": {
+    "age_min": 18,
+    "countries": [
+      "US"
+    ],
+    "location_types": [
+      "home",
+      "recent"
+    ]
+  },
+  "copy": {
+    "headline": "Get Your First Pack of Nightcap FREE — While It's Still On Sale!✨",
+    "texts": [
+      "\"I used to plan my entire week around my social calendar. Friday night out meant Saturday recovery, which meant Sunday was slow too. Three days derailed by one night. Last weekend I went to a wedding, enjoyed myself fully, stayed out late, took Nightcap before bed, and woke up at 7am for my normal gym session. No drag, no fog, no slow start. Just got my weekend back.\"\n\nPeople are rating this a 10/10 for one simple reason: you don't have to compromise your social life. You don't have to miss out on the fun. You just mix this with water before bed. While you sleep, it supports your body's natural metabolic recovery, clears the next-day fog, and replenishes essential hydration levels fast.\n\nGET YOUR FIRST PACK FREE!\n✅ Wake up feeling like you stayed in (Or your money back)\n✅ Clear head, sharp focus, ready to execute\n✅ Hit your morning workout as planned\n✅ Never waste a weekend day again\n\nTastes like citrus. Works whenever you take it.\nSame nights out, zero wasted mornings.\n\n⚡ Try it risk-free while it's on sale",
+      "GET YOUR FIRST PACK FREE!\n✅ Wake up feeling like you stayed in (Or your money back)\n✅ Clear head, sharp focus, ready to execute\n✅ Hit your morning workout as planned\n✅ Never waste a weekend day again\n\nTastes like citrus. Works whenever you take it.\nSame nights out, zero wasted mornings.\n\n⚡ Try it risk-free while it's on sale"
+    ],
+    "url": "https://revivepluslabs.com/"
+  },
+  "versions": [
+    "Mau",
+    "Janus"
+  ],
+  "creatives": [
+    {
+      "id": "1_polished",
+      "adset_code": "SP",
+      "identity": "Social Parent",
+      "images": {
+        "Mau": {
+          "portrait": "67fdd017dc67f5ce38f19f993b440b00",
+          "square": "c853ff125697103a73299db439df73ae"
+        },
+        "Janus": {
+          "portrait": "e032eaae701448b3aa7cb8d6ae96a72d",
+          "square": "f1de3dc81336ed2c9ecd16c444d66a6b"
+        }
+      }
+    },
+    {
+      "id": "2_polished",
+      "adset_code": "SP",
+      "identity": "Social Parent",
+      "images": {
+        "Mau": {
+          "portrait": "8ba92369fca6f00c3566649c9eee2d3c",
+          "square": "38bc59904be03e9f02da61f222f73915"
+        },
+        "Janus": {
+          "portrait": "97e497563fb57a1289388fc7d2c3d8a8",
+          "square": "d82efd6039f5135cc16448cc0be218f7"
+        }
+      }
+    },
+    {
+      "id": "1_no_gem",
+      "adset_code": "SP",
+      "identity": "Social Parent",
+      "images": {
+        "Mau": {
+          "portrait": "c11ba69754a0924b6c82447c0054c957",
+          "square": "47881ae322f1830300e459da71b8e55d"
+        },
+        "Janus": {
+          "portrait": "6886658f6421549e07cb9dfeb62280f1",
+          "square": "59f91b005b3ffaeeddc96f8f34a42510"
+        }
+      }
+    },
+    {
+      "id": "2_no_gem",
+      "adset_code": "SP",
+      "identity": "Social Parent",
+      "images": {
+        "Mau": {
+          "portrait": "ab582c47bca9312b2c5f5cad368dee78",
+          "square": "7d8df8c0491369178625422715b0f37a"
+        },
+        "Janus": {
+          "portrait": "1950e5d6347a2087cc6970021a69f64f",
+          "square": "e1619f33510d6f028590c40db7432f3f"
+        }
+      }
+    },
+    {
+      "id": "3_no_gem",
+      "adset_code": "FIT",
+      "identity": "Fitness",
+      "images": {
+        "Mau": {
+          "portrait": "b8a2df056c41d5710bfba1446af50df4",
+          "square": "3e15976a599fa88c3f34dfefa92400e9"
+        },
+        "Janus": {
+          "portrait": "bc1fc080bfac4ef8cef92ced452d1060",
+          "square": "5d59cb76276aecbda51f7f3292de9d7c"
+        }
+      }
+    },
+    {
+      "id": "4_no_gem",
+      "adset_code": "FIT",
+      "identity": "Fitness",
+      "images": {
+        "Mau": {
+          "portrait": "569a148dc5d937dfd9d8db38a1cda04e",
+          "square": "0a5dffbe434144cac159abd4884fe07e"
+        },
+        "Janus": {
+          "portrait": "dcec5524ff175990de69319e62eccac2",
+          "square": "b96facce768a6d34ffd08b9e06a359a3"
+        }
+      }
+    },
+    {
+      "id": "workout_v1",
+      "adset_code": "FIT",
+      "identity": "Fitness",
+      "images": {
+        "Mau": {
+          "portrait": "cf4cdc503d548df45cc2bee58b081883",
+          "square": "16172b3266848b335114b9ba0ebb5bd8"
+        },
+        "Janus": {
+          "portrait": "ccade6de9d1d98e508da9a3aebaab6e1",
+          "square": "34c0acb3a6913cc66f12873b3b62ae9c"
+        }
+      }
+    },
+    {
+      "id": "workout_v2",
+      "adset_code": "FIT",
+      "identity": "Fitness",
+      "images": {
+        "Mau": {
+          "portrait": "3b7c96b6f096f11445c95cb2bd65a1e9",
+          "square": "07c7ea263d380a838021290d0a22c1ee"
+        },
+        "Janus": {
+          "portrait": "205029b9b41a70f00e4a8f20bdfdd3d8",
+          "square": "e7fe0111b4472a2eba142b570c1f256b"
+        }
+      }
+    },
+    {
+      "id": "15_polished",
+      "adset_code": "FIT",
+      "identity": "Routine",
+      "images": {
+        "Mau": {
+          "portrait": "a1723396d572cb500c9361ee3fb41e81",
+          "square": "705a9868509b056b5def13080a627dfa"
+        },
+        "Janus": {
+          "portrait": "5dcb71a4829f34f17b247f60e35df3ab",
+          "square": "a2d024dfa032cb3d04680ce61cad717d"
+        }
+      }
+    },
+    {
+      "id": "5_polished",
+      "adset_code": "GN",
+      "identity": "Girls Night",
+      "images": {
+        "Mau": {
+          "portrait": "df2434b954c2fb7e0c49dc77221c287b",
+          "square": "217efdadf9350332e45f97c9f9604535"
+        },
+        "Janus": {
+          "portrait": "171370166fbdb7ca8d6755f3a7b032c4",
+          "square": "695692c3d161f8aa249a0ea4425d4c4d"
+        }
+      }
+    },
+    {
+      "id": "5_no_gem",
+      "adset_code": "GN",
+      "identity": "Girls Night",
+      "images": {
+        "Mau": {
+          "portrait": "fbabc978cc914f59051c548954ddd678",
+          "square": "82910a477ccc992d12f9cbb2f3b23b40"
+        },
+        "Janus": {
+          "portrait": "44c1b1cf6821951f912d058af66ed2e2",
+          "square": "95001b32cf36e8959ebb3a6846ee9d85"
+        }
+      }
+    },
+    {
+      "id": "8_polished",
+      "adset_code": "GN",
+      "identity": "Girls Night",
+      "images": {
+        "Mau": {
+          "portrait": "5be5951ece312334a562174105f6ca06",
+          "square": "a288877c4d0b8b9be8c05987661b8fbc"
+        },
+        "Janus": {
+          "portrait": "16f38c50c52bd71ba2b762e487244b4c",
+          "square": "9d6cf276de2fd42cfeccd1c6ac4323ac"
+        }
+      }
+    },
+    {
+      "id": "8_no_gem",
+      "adset_code": "GN",
+      "identity": "Girls Night",
+      "images": {
+        "Mau": {
+          "portrait": "a9070fb4e80d756eb9ea007435a7b6e4",
+          "square": "83795bb2eb26345a96755fa0235b70ad"
+        },
+        "Janus": {
+          "portrait": "61bb68dca4731ede2757b5817b1b178e",
+          "square": "5cc48a88a204f291d068b7e88eb57c95"
+        }
+      }
+    },
+    {
+      "id": "13_polished",
+      "adset_code": "GN",
+      "identity": "Girls Night",
+      "images": {
+        "Mau": {
+          "portrait": "619a20acce29a06dc22edd58e2eb1471",
+          "square": "a41880fdfb4b11262e00ec506b3ac938"
+        },
+        "Janus": {
+          "portrait": "b6a7f710b36d017506f25ef2d08f0127",
+          "square": "16be544bbccd4b123dc51715d6ace344"
+        }
+      }
+    },
+    {
+      "id": "7_polished",
+      "adset_code": "BN",
+      "identity": "Boys Night",
+      "images": {
+        "Mau": {
+          "portrait": "b6a19e6c3c5c3433ee7351b9418a76dd",
+          "square": "12c22b7f8255a84870609f736aae73db"
+        },
+        "Janus": {
+          "portrait": "f1eb00638d1c46abcdc429870a9a69b3",
+          "square": "47f53b6fd34d738e14a68cbee86f563e"
+        }
+      }
+    },
+    {
+      "id": "9_polished",
+      "adset_code": "BN",
+      "identity": "Boys Night",
+      "images": {
+        "Mau": {
+          "portrait": "13e19ebd8b27b9dc6bbca1394d5b280d",
+          "square": "f6f4ce02d5b8a3b5b8256b3fc897f772"
+        },
+        "Janus": {
+          "portrait": "10f8506ad2813a923c9a6a01e7aa1d2b",
+          "square": "b439cd2624d9e3e01c38ef5dc796dc35"
+        }
+      }
+    },
+    {
+      "id": "9_no_gem",
+      "adset_code": "BN",
+      "identity": "Boys Night",
+      "images": {
+        "Mau": {
+          "portrait": "40def986f18d83ede2e4295a2b46f214",
+          "square": "c2e67a826ba2a6ca2a70f9c5e132e62a"
+        },
+        "Janus": {
+          "portrait": "dfae6a76e4ccda4c591c22b1d9343fc0",
+          "square": "bb641ed3ed0e4bdba512cd5cd3bc2c53"
+        }
+      }
+    },
+    {
+      "id": "15_no_gem",
+      "adset_code": "BN",
+      "identity": "Boys Night",
+      "images": {
+        "Mau": {
+          "portrait": "f1bb1e2e37712693dc2907e26d6df848",
+          "square": "6d3c316935198b07bc4c6f68c09a90e0"
+        },
+        "Janus": {
+          "portrait": "baae9ac9b822d4a99c01d00c21fb4120",
+          "square": "8a2f44393490687a6e6399960230a5b4"
+        }
+      }
+    },
+    {
+      "id": "6_no_gem",
+      "adset_code": "PRO",
+      "identity": "Professionals",
+      "images": {
+        "Mau": {
+          "portrait": "f0ac65fc8e6d776a616a771c3222c4ab",
+          "square": "938cddee9287fc3501864020e6c51f4b"
+        },
+        "Janus": {
+          "portrait": "44daf0d41187aaf6f8970a3c72511071",
+          "square": "6133e662fc83ef80be1619f2b1cfb07f"
+        }
+      }
+    },
+    {
+      "id": "10_polished",
+      "adset_code": "PRO",
+      "identity": "Professionals",
+      "images": {
+        "Mau": {
+          "portrait": "d8cb654fb9def286ff1cf565cb1529c3",
+          "square": "832d3fff133d8273a29bf692444d799e"
+        },
+        "Janus": {
+          "portrait": "f350c639b2371ec190b0d3d6ecdb5593",
+          "square": "a210d0edb25dae7f22a895f1229fd8cb"
+        }
+      }
+    },
+    {
+      "id": "10_no_gem",
+      "adset_code": "PRO",
+      "identity": "Professionals",
+      "images": {
+        "Mau": {
+          "portrait": "f6f33c44ed2f9dfc398c94b26fecc181",
+          "square": "2c628d2c7c3d854928ff168b3ec84bad"
+        },
+        "Janus": {
+          "portrait": "08dbacd9bfa8c777a8f043855d60848f",
+          "square": "aad538f9f8d96ff3bfdec9e5afa30cd1"
+        }
+      }
+    },
+    {
+      "id": "14_no_gem",
+      "adset_code": "PRO",
+      "identity": "Professionals",
+      "images": {
+        "Mau": {
+          "portrait": "77d539175ec61808e6bde9097b914fe4",
+          "square": "233781efc62d2dc41836d70cb155b6ac"
+        },
+        "Janus": {
+          "portrait": "958d0609593b5018ea364434b022c88e",
+          "square": "30f1b10954b6041533e8def744a4eb0a"
+        }
+      }
+    },
+    {
+      "id": "16_no_gem",
+      "adset_code": "PRO",
+      "identity": "Professionals",
+      "images": {
+        "Mau": {
+          "portrait": "0b9948a1f54c851f83dee415c3615f39",
+          "square": "21ee22e55d654e13f80877239114ff39"
+        },
+        "Janus": {
+          "portrait": "ac56844c6a8dc94d1e14a602bceee3e3",
+          "square": "81c305fe1c49ba4f7735345ca07201ad"
+        }
+      }
+    },
+    {
+      "id": "11_polished",
+      "adset_code": "HH",
+      "identity": "Lifestyle",
+      "images": {
+        "Mau": {
+          "portrait": "c2acd410813eb3248c172170fbc8a1d9",
+          "square": "f40307b0e370f39f6dcb229fd78e3458"
+        },
+        "Janus": {
+          "portrait": "2283c4f2eef5085f2dd638ed5573d6d7",
+          "square": "a7b426bd14edd4a7ff8dab9b90836197"
+        }
+      }
+    },
+    {
+      "id": "11_no_gem",
+      "adset_code": "HH",
+      "identity": "Lifestyle",
+      "images": {
+        "Mau": {
+          "portrait": "a98ba2688c3241ab7b227c07633b82ee",
+          "square": "121a66c93881a1e7e4a5a8ea0777a44e"
+        },
+        "Janus": {
+          "portrait": "d83ec76754863639f84fd07ace2f05ef",
+          "square": "121a66c93881a1e7e4a5a8ea0777a44e"
+        }
+      }
+    },
+    {
+      "id": "17_polished",
+      "adset_code": "HH",
+      "identity": "Lifestyle",
+      "images": {
+        "Mau": {
+          "portrait": "5895e2bc86c4d5709fd23e756cfe3ced",
+          "square": "41b0ebc51bded5dd9ddf77d131c29aab"
+        },
+        "Janus": {
+          "portrait": "882118bd3cae98b63b10a4b28b9a7df2",
+          "square": "b1ea89be30105852e66dada61b77b7ca"
+        }
+      }
+    },
+    {
+      "id": "18_polished",
+      "adset_code": "HH",
+      "identity": "Lifestyle",
+      "images": {
+        "Mau": {
+          "portrait": "cc8a6b81d92cb56f6f385ce721513c07",
+          "square": "193d1b0bd4b0b29aa619131694cb16f5"
+        },
+        "Janus": {
+          "portrait": "8bc8244262b132307e53b88994c87700",
+          "square": "3df88182b2b8c40f63ded42dabbb6942"
+        }
+      }
+    },
+    {
+      "id": "19_polished",
+      "adset_code": "HH",
+      "identity": "Lifestyle",
+      "images": {
+        "Mau": {
+          "portrait": "2356d7d8f6ff15e4017cc005dc88cd63",
+          "square": "454423aa0fb77f6da209d9d4c1d35876"
+        },
+        "Janus": {
+          "portrait": "f0ac0b302872fbd99af5a29711a2a304",
+          "square": "1526b4991a76fa8fb5cb187708ad82c2"
+        }
+      }
+    },
+    {
+      "id": "6_polished",
+      "adset_code": "BR",
+      "identity": "Broad",
+      "images": {
+        "Mau": {
+          "portrait": "d5285d88d3261183d13c7f7ef6a81785",
+          "square": "84ef3a81c67d7fcf15b09608a6c3495c"
+        },
+        "Janus": {
+          "portrait": "68c91895b4164037d0b62460f5bd382b",
+          "square": "d9b6256a93bad5a41e21d47186f0989a"
+        }
+      }
+    },
+    {
+      "id": "12_polished",
+      "adset_code": "BR",
+      "identity": "Broad",
+      "images": {
+        "Mau": {
+          "portrait": "df8c3ada0df6140ff944affa096a8334",
+          "square": "d20b7f5a7100d4f895e308c104a9a802"
+        },
+        "Janus": {
+          "portrait": "c6f99eca5e7a518c2a218ac9bec066ec",
+          "square": "7325c4f54ecb73414329615c4f9c7a10"
+        }
+      }
+    },
+    {
+      "id": "13_no_gem",
+      "adset_code": "BR",
+      "identity": "Broad",
+      "images": {
+        "Mau": {
+          "portrait": "df4b77f4b9e24d40f3e7380c559c8833",
+          "square": "638e436a0fcf3d60f8430d396828e498"
+        },
+        "Janus": {
+          "portrait": "b7498418a303ea5d8fc2e1ba1f01b0f1",
+          "square": "90409a36200e4a5315ae339c94664488"
+        }
+      }
+    },
+    {
+      "id": "14_polished",
+      "adset_code": "BR",
+      "identity": "Broad",
+      "images": {
+        "Mau": {
+          "portrait": "3c374f3e401ca1e37280116d623b47b8",
+          "square": "6657afeebf4d9ae4d527401af34bf240"
+        },
+        "Janus": {
+          "portrait": "c288728626f486fb3948597056e0fc69",
+          "square": "d57a5e70ab36783c09d050c788e5b0c6"
+        }
+      }
+    },
+    {
+      "id": "16_polished",
+      "adset_code": "BR",
+      "identity": "Broad",
+      "images": {
+        "Mau": {
+          "portrait": "1f60f6355cf355855c422e321718471f",
+          "square": "9779a177e4618c654bcbb85be9922f14"
+        },
+        "Janus": {
+          "portrait": "b41d3fbffcc868800bc7b16ff07f8220",
+          "square": null
+        }
+      }
+    }
+  ],
+  "progress_file": "meta_progress_nightcap_mar3.json"
+}

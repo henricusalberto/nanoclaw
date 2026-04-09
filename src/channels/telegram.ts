@@ -211,6 +211,19 @@ export class TelegramChannel implements Channel {
         return;
       }
 
+      // React with ⚡ when the message will trigger the agent
+      const willTrigger =
+        group.isMain || !group.requiresTrigger || TRIGGER_PATTERN.test(content);
+      if (willTrigger) {
+        this.bot!.api.raw
+          .setMessageReaction({
+            chat_id: ctx.chat.id,
+            message_id: ctx.message.message_id,
+            reaction: [{ type: 'emoji', emoji: '⚡' }],
+          })
+          .catch(() => {}); // non-fatal — reactions aren't critical
+      }
+
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
         id: msgId,

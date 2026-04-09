@@ -25,10 +25,16 @@ Example query:
     { "type": "lex", "query": "search term" },
     { "type": "vec", "query": "natural language question" }
   ],
-  "collections": ["telegram_main"],
+  "collections": ["groups", "businesses", "memory"],
   "limit": 10
 }
 ```
+
+Available collections:
+- `groups` — NanoClaw group memory and CLAUDE.md files
+- `businesses` — Business documents (Revive Plus, Pinterest, Coaching, etc.)
+- `memory` — OpenClaw historical memory
+- `skills` / `docs` / `systems` — Reference material
 
 ## CLI Fallback
 
@@ -36,13 +42,13 @@ If MCP tools are unavailable, use the QMD CLI directly:
 
 ```bash
 # Keyword search
-npx qmd search "search term" -c telegram_main
+npx qmd search "search term" -c groups
 
 # Semantic search (requires embeddings)
-npx qmd vsearch "natural language question" -c telegram_main
+npx qmd vsearch "natural language question" -c groups,businesses
 
 # Hybrid search with reranking (best quality)
-npx qmd query "question" -c telegram_main
+npx qmd query "question" -c groups
 ```
 
 ## Fallback: Direct File Search

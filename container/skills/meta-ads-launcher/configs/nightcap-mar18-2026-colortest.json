@@ -1,0 +1,227 @@
+{
+  "meta": {
+    "token": "EAAW6o7oCqB8BQ28VXxE9qjn7W60cs07OjXwjas2fs3RomFjJYyT607aO0ZBUDFfcwq3ZAUcCR1HL8OPd1l2QNaav1B864ZCZAgE0xGHkPToeDG3ryMbYUZASm6Y8G9yZCpxSS5gAzxZBGVoMGNKZB6lpOG3MPBNkXqgyTu2XhJxek7LM7RaTIpczvRs3idi0p5CVtMZBgqrWSGSeHI7RHFtv24slpJvEB8Ui5ZAWNgvz2tFWFdqZBZAAt7ZA68zCsKiTnQ9ssYSmS01dBMpeZAA196HxPwUBM0gNoOdAK7AGhcVwZDZD",
+    "account_id": "act_1400123811678069",
+    "page_id": "902125422992374",
+    "ig_user_id": "17841479960010364",
+    "pixel_id": "1865987104055028"
+  },
+  "campaign": {
+    "name": "Nightcap — Color Test Mar 18 2026",
+    "objective": "OUTCOME_SALES",
+    "start_time": 1742292000
+  },
+  "adsets": [
+    {
+      "code": "LIGHT",
+      "name": "2026/03/18 Nightcap Portrait — Light (Blue-Peach + Pink)",
+      "daily_budget_cents": 3000
+    },
+    {
+      "code": "DARK",
+      "name": "2026/03/18 Nightcap Portrait — Dark (Black + Navy-Teal)",
+      "daily_budget_cents": 3000
+    },
+    {
+      "code": "TEAL_BAR",
+      "name": "2026/03/18 Nightcap Portrait — Teal & Bar",
+      "daily_budget_cents": 3000
+    }
+  ],
+  "targeting": {
+    "age_min": 18,
+    "countries": ["US"],
+    "location_types": ["home", "recent"]
+  },
+  "copy": {
+    "headline": "Get Your First Pack of Nightcap FREE — While It's Still On Sale!✨",
+    "texts": [
+      "I will never go out to drink again without nightcap. It saves my next day."
+    ],
+    "url": "https://revivepluslabs.com/"
+  },
+  "versions": ["v1"],
+  "creatives": [
+    {
+      "id": "drink_no_hangover_light1",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "8df54f46b37f3dd96eaa6734a4059524" } }
+    },
+    {
+      "id": "drink_no_hangover_light3",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "aa5c72ee419b96a391695643e75d76e3" } }
+    },
+    {
+      "id": "enjoy_refuse_light1",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "8250b8beb74c4a4bf22f2ca423ffa14d" } }
+    },
+    {
+      "id": "enjoy_refuse_light3",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "af8093fb59c18cff99f8e845f0d76a10" } }
+    },
+    {
+      "id": "enjoy_hate_hang_light1",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "72dff1c4e7506afb92996d0c2b8f379e" } }
+    },
+    {
+      "id": "enjoy_hate_hang_light3",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "8deffa9c75244b27981f212a36053c3a" } }
+    },
+    {
+      "id": "love_hang_light1",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "1a33470081bdba7b41b8ba946c9dfe85" } }
+    },
+    {
+      "id": "love_hang_light3",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "5c1985ca2b623b5b446fb9cc29650be4" } }
+    },
+    {
+      "id": "love_morning_light1",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "63fe9fbe3fbf439882af349725e47331" } }
+    },
+    {
+      "id": "love_morning_light3",
+      "adset_code": "LIGHT",
+      "identity": "Color Test Light",
+      "images": { "v1": { "portrait": "ceb4c8389dffe4ec63fafa32dec0f466" } }
+    },
+    {
+      "id": "drink_no_hangover_dark2",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "65924f5bb463fd49b9138aeb7c08fc8b" } }
+    },
+    {
+      "id": "drink_no_hangover_dark4",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "524f780de5c3a2e2ea10984df722f4fa" } }
+    },
+    {
+      "id": "enjoy_refuse_dark2",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "a793f6c21f5e89e4ff3f677ea53a7de5" } }
+    },
+    {
+      "id": "enjoy_refuse_dark4",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "4014485ef54d5472ba9dd13701f9ca98" } }
+    },
+    {
+      "id": "enjoy_hate_hang_dark2",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "9c6cb151871f345cb2713f902085b692" } }
+    },
+    {
+      "id": "enjoy_hate_hang_dark4",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "968a0478de0fe864c5894462fb9bacfe" } }
+    },
+    {
+      "id": "love_hang_dark2",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "4c355258ad4f7bfda43932175ff18a2f" } }
+    },
+    {
+      "id": "love_hang_dark4",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "f5aed9e3c61d7438a59a9cafb74f86bb" } }
+    },
+    {
+      "id": "love_morning_dark2",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "05add8e8cdafd826a43549fe613bc2a8" } }
+    },
+    {
+      "id": "love_morning_dark4",
+      "adset_code": "DARK",
+      "identity": "Color Test Dark",
+      "images": { "v1": { "portrait": "3da30ea55f961b36458979be47d414b7" } }
+    },
+    {
+      "id": "drink_no_hangover_teal",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "604defd0b119b0bc512bf159642bcc47" } }
+    },
+    {
+      "id": "drink_no_hangover_bar",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "55816c6c815635ab671f273e6f716106" } }
+    },
+    {
+      "id": "enjoy_refuse_teal",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "390fc3eca5935dfc83b2944a6edb1b07" } }
+    },
+    {
+      "id": "enjoy_refuse_bar",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "3015a8155691f775279b76c501d0840a" } }
+    },
+    {
+      "id": "enjoy_hate_hang_teal",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "12562d5c6a462f71a13f211bf6117fc0" } }
+    },
+    {
+      "id": "enjoy_hate_hang_bar",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "fd4d5752f03a35fb3bd22d4d14e4f5a6" } }
+    },
+    {
+      "id": "love_hang_teal",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "4712af13aaf194a61ff7d3d453f4398f" } }
+    },
+    {
+      "id": "love_hang_bar",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "a71ef549f7f1f7ef6f5927af4e365b96" } }
+    },
+    {
+      "id": "love_morning_teal",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "f3021a4467a571b41689cdf2ac1b7eea" } }
+    },
+    {
+      "id": "love_morning_bar",
+      "adset_code": "TEAL_BAR",
+      "identity": "Color Test Teal & Bar",
+      "images": { "v1": { "portrait": "650c560819f21619a302bda84501405c" } }
+    }
+  ],
+  "progress_file": "/Users/kimbehnke/.openclaw/workspace/BUSINESSES/reviveplus/meta_v4_colortest_progress.json"
+}
