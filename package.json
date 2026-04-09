@@ -18,7 +18,11 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "wiki:bridge": "tsx src/wiki/cli.ts bridge",
+    "wiki:compile": "tsx src/wiki/cli.ts compile",
+    "wiki:lint": "tsx src/wiki/cli.ts lint",
+    "wiki:doctor": "npm run wiki:bridge && npm run wiki:compile && npm run wiki:lint"
   },
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",

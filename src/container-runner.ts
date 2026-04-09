@@ -22,6 +22,7 @@ import {
 import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { syncWikiBridge } from './wiki/bridge.js';
 import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
@@ -304,10 +305,7 @@ function buildVolumeMounts(
       const realRoot = (() => {
         try {
           const expanded = m.hostPath.startsWith('~/')
-            ? path.join(
-                process.env.HOME || os.homedir(),
-                m.hostPath.slice(2),
-              )
+            ? path.join(process.env.HOME || os.homedir(), m.hostPath.slice(2))
             : m.hostPath;
           return fs.realpathSync(expanded);
         } catch {
@@ -490,6 +488,54 @@ async function buildContainerArgs(
   return args;
 }
 
+/**
+ * Run the wiki bridge sync if this group's directory contains a wiki vault
+ * with a `.openclaw-wiki/` state directory. Errors are logged but never
+ * propagated — bridge failures must not block container spawns.
+ */
+async function maybeRunWikiBridgeSync(
+  group: RegisteredGroup,
+): Promise<void> {
+  const groupDir = resolveGroupFolderPath(group.folder);
+  const vaultPath = path.join(groupDir, 'wiki');
+  const stateDir = path.join(vaultPath, '.openclaw-wiki');
+  if (!fs.existsSync(stateDir)) return;
+  try {
+    const result = await syncWikiBridge(vaultPath, process.cwd());
+    if (
+      result.importedCount > 0 ||
+      result.updatedCount > 0 ||
+      result.removedCount > 0
+    ) {
+      logger.info(
+        {
+          group: group.folder,
+          imported: result.importedCount,
+          updated: result.updatedCount,
+          removed: result.removedCount,
+          skipped: result.skippedCount,
+          durationMs: result.durationMs,
+        },
+        'Wiki bridge sync',
+      );
+    } else {
+      logger.debug(
+        {
+          group: group.folder,
+          skipped: result.skippedCount,
+          durationMs: result.durationMs,
+        },
+        'Wiki bridge sync (no changes)',
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { group: group.folder, err: String(err) },
+      'Wiki bridge sync failed (continuing with container spawn)',
+    );
+  }
+}
+
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -500,6 +546,12 @@ export async function runContainerAgent(
 
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
+
+  // Wiki bridge sync — runs before spawning the container for any group
+  // whose vault directory contains a `.openclaw-wiki/` state dir. Cheap
+  // when nothing has changed (just stats + JSON read), so safe to call
+  // unconditionally on every spawn. See src/wiki/bridge.ts.
+  await maybeRunWikiBridgeSync(group);
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');

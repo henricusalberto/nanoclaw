@@ -1,0 +1,265 @@
+/**
+ * Wiki compile pipeline.
+ *
+ * Walks the vault, parses every page, computes related blocks, and rewrites
+ * each page's `## Related` managed block. Also regenerates index.md and
+ * per-directory indexes (entities/index.md, concepts/index.md, etc).
+ *
+ * Caches (agent-digest.json, claims.jsonl) are emitted in Phase 4.
+ *
+ * Compile is idempotent: running it twice on an unchanged vault produces
+ * byte-identical output.
+ */
+
+import fs from 'fs';
+import path from 'path';
+
+import {
+  buildAgentDigest,
+  buildClaimsJsonlLines,
+  writeAgentDigest,
+  writeClaimsJsonl,
+} from './digest.js';
+import { appendWikiLogEvent } from './log.js';
+import {
+  parseWikiPage,
+  readWikiPage,
+  replaceManagedBlock,
+  serializeWikiPage,
+  WikiPageKind,
+} from './markdown.js';
+import {
+  computeRelatedBuckets,
+  PageSummary,
+  renderRelatedBlock,
+  summarizePage,
+} from './related.js';
+
+const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
+  { dir: 'entities', kind: 'entity' },
+  { dir: 'concepts', kind: 'concept' },
+  { dir: 'syntheses', kind: 'synthesis' },
+  { dir: 'sources', kind: 'source' },
+  { dir: 'reports', kind: 'report' },
+];
+
+const MANAGED_BLOCK_NAME = 'related';
+
+export interface CompileResult {
+  pageCount: number;
+  rewrittenCount: number;
+  indexesRefreshed: number;
+  digestPageCount: number;
+  digestClaimCount: number;
+  durationMs: number;
+}
+
+// =============================================================================
+// Page collection
+// =============================================================================
+
+function walkVault(vaultPath: string): { absPath: string; kind: WikiPageKind }[] {
+  const results: { absPath: string; kind: WikiPageKind }[] = [];
+  for (const { dir, kind } of VAULT_DIRS) {
+    const dirPath = path.join(vaultPath, dir);
+    if (!fs.existsSync(dirPath)) continue;
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      results.push({ absPath: path.join(dirPath, entry.name), kind });
+    }
+  }
+  return results;
+}
+
+function collectPageSummaries(vaultPath: string): {
+  summaries: PageSummary[];
+  parsedByPath: Map<string, ReturnType<typeof parseWikiPage>>;
+} {
+  const summaries: PageSummary[] = [];
+  const parsedByPath = new Map<string, ReturnType<typeof parseWikiPage>>();
+  for (const { absPath } of walkVault(vaultPath)) {
+    let parsed;
+    try {
+      parsed = readWikiPage(absPath);
+    } catch {
+      continue;
+    }
+    const summary = summarizePage(absPath, vaultPath, parsed);
+    if (!summary) continue;
+    summaries.push(summary);
+    parsedByPath.set(absPath, parsed);
+  }
+  return { summaries, parsedByPath };
+}
+
+// =============================================================================
+// Related block rewriting
+// =============================================================================
+
+function refreshRelatedBlocks(
+  vaultPath: string,
+  summaries: PageSummary[],
+  parsedByPath: Map<string, ReturnType<typeof parseWikiPage>>,
+): number {
+  const pagesById = new Map<string, PageSummary>();
+  const pagesByBasename = new Map<string, PageSummary>();
+  for (const s of summaries) {
+    pagesById.set(s.id, s);
+    pagesByBasename.set(s.basename, s);
+  }
+
+  let rewritten = 0;
+  for (const page of summaries) {
+    // Skip source pages — bridge owns them, related blocks would just churn
+    // (they get fully overwritten on every bridge sync anyway)
+    if (page.kind === 'source') continue;
+    // Skip report pages — they're auto-generated dashboards
+    if (page.kind === 'report') continue;
+
+    const buckets = computeRelatedBuckets(
+      page,
+      summaries,
+      pagesById,
+      pagesByBasename,
+    );
+    const blockBody = renderRelatedBlock(buckets);
+
+    const parsed = parsedByPath.get(page.filePath);
+    if (!parsed) continue;
+
+    const newBody = replaceManagedBlock(parsed.body, MANAGED_BLOCK_NAME, blockBody);
+    if (newBody === parsed.body) continue;
+
+    const newContent = serializeWikiPage(parsed.frontmatter, newBody);
+    const tempPath = `${page.filePath}.tmp`;
+    fs.writeFileSync(tempPath, newContent);
+    fs.renameSync(tempPath, page.filePath);
+    rewritten++;
+  }
+  return rewritten;
+}
+
+// =============================================================================
+// Index regeneration
+// =============================================================================
+
+const INDEX_BLOCK_NAME = 'index';
+
+function buildIndexBody(
+  pages: PageSummary[],
+  groupBy: 'directory' | 'kind',
+): string {
+  const lines: string[] = [];
+  if (groupBy === 'directory') {
+    const byDir = new Map<string, PageSummary[]>();
+    for (const p of pages) {
+      const dir = p.relativePath.split(path.sep)[0];
+      const arr = byDir.get(dir) || [];
+      arr.push(p);
+      byDir.set(dir, arr);
+    }
+    for (const [dir, arr] of [...byDir].sort((a, b) => a[0].localeCompare(b[0]))) {
+      lines.push(`### ${dir}/`);
+      arr.sort((a, b) => a.title.localeCompare(b.title));
+      for (const p of arr) {
+        lines.push(`- [[${p.basename}|${p.title}]]`);
+      }
+      lines.push('');
+    }
+  } else {
+    const sorted = [...pages].sort((a, b) => a.title.localeCompare(b.title));
+    for (const p of sorted) {
+      lines.push(`- [[${p.basename}|${p.title}]]`);
+    }
+  }
+  return lines.join('\n').trimEnd();
+}
+
+function refreshIndexes(
+  vaultPath: string,
+  summaries: PageSummary[],
+): number {
+  let count = 0;
+
+  // Per-directory indexes
+  for (const { dir } of VAULT_DIRS) {
+    const dirPath = path.join(vaultPath, dir);
+    if (!fs.existsSync(dirPath)) continue;
+    const dirPages = summaries.filter(
+      (p) => p.relativePath.split(path.sep)[0] === dir,
+    );
+    if (dirPages.length === 0) continue;
+    const indexPath = path.join(dirPath, 'index.md');
+    const body = buildIndexBody(dirPages, 'kind');
+    const existingContent = fs.existsSync(indexPath)
+      ? fs.readFileSync(indexPath, 'utf-8')
+      : `# ${dir.charAt(0).toUpperCase() + dir.slice(1)}\n\n`;
+    const newContent = replaceManagedBlock(
+      existingContent,
+      INDEX_BLOCK_NAME,
+      body,
+    );
+    if (newContent !== existingContent) {
+      fs.writeFileSync(indexPath, newContent);
+      count++;
+    }
+  }
+
+  // Root index
+  const rootIndexPath = path.join(vaultPath, 'index.md');
+  const rootBody = buildIndexBody(summaries, 'directory');
+  const existingRoot = fs.existsSync(rootIndexPath)
+    ? fs.readFileSync(rootIndexPath, 'utf-8')
+    : `# Wiki Index\n\nThe catalog of every page in this wiki, organized by category. Updated on every compile pass.\n\n`;
+  const newRoot = replaceManagedBlock(existingRoot, INDEX_BLOCK_NAME, rootBody);
+  if (newRoot !== existingRoot) {
+    fs.writeFileSync(rootIndexPath, newRoot);
+    count++;
+  }
+
+  return count;
+}
+
+// =============================================================================
+// Public entry point
+// =============================================================================
+
+export async function compileWiki(vaultPath: string): Promise<CompileResult> {
+  const startedAt = Date.now();
+  const { summaries, parsedByPath } = collectPageSummaries(vaultPath);
+
+  const rewrittenCount = refreshRelatedBlocks(vaultPath, summaries, parsedByPath);
+  const indexesRefreshed = refreshIndexes(vaultPath, summaries);
+
+  // Build agent-digest.json + claims.jsonl from the freshly-rewritten pages.
+  // Re-read frontmatter from disk so the digest reflects the post-related state.
+  const digestInputs: { filePath: string; relativePath: string; frontmatter: ReturnType<typeof parseWikiPage>['frontmatter'] }[] = [];
+  for (const summary of summaries) {
+    try {
+      const reparsed = readWikiPage(summary.filePath);
+      digestInputs.push({
+        filePath: summary.filePath,
+        relativePath: summary.relativePath,
+        frontmatter: reparsed.frontmatter,
+      });
+    } catch {
+      // skip
+    }
+  }
+  const digest = buildAgentDigest(digestInputs);
+  writeAgentDigest(vaultPath, digest);
+  const claimsLines = buildClaimsJsonlLines(digestInputs);
+  writeClaimsJsonl(vaultPath, claimsLines);
+
+  const result: CompileResult = {
+    pageCount: summaries.length,
+    rewrittenCount,
+    indexesRefreshed,
+    digestPageCount: digest.pages.length,
+    digestClaimCount: digest.claimCount,
+    durationMs: Date.now() - startedAt,
+  };
+
+  appendWikiLogEvent(vaultPath, 'compile', { ...result });
+  return result;
+}

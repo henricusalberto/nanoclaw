@@ -10,18 +10,115 @@ You maintain a persistent, structured, interlinked markdown wiki for Maurizio. D
 
 This wiki only lives in the **Wiki Inbox** group (`telegram_wiki-inbox`). When invoked from any other group, refuse politely and tell the user to use the Wiki Inbox.
 
-## Architecture (three layers)
+## CRITICAL: First action on every wake-up
 
-| Layer | Path | Owner | Mutability |
-|-------|------|-------|------------|
-| Raw sources | `sources/` | User | Immutable. You read but never modify. |
-| Wiki | `wiki/` | You | You create, update, and reorganize freely. |
-| Schema | This SKILL.md + group `CLAUDE.md` | Both | You can propose schema improvements. |
+**Before answering the user, check `.openclaw-wiki/pending-ingest.json`.**
 
-## Two special files
+If the file exists, the bridge sync (which runs automatically before every container spawn) has detected new or updated source files in `sources/bridge-*.md`. The marker file lists them. Your job is to ingest them into the wiki BEFORE handling the user's actual message.
 
-- **`wiki/index.md`** — content-oriented catalog organized by category. Read this FIRST when answering any query, to locate relevant pages before drilling deeper. Update on every ingest.
-- **`wiki/log.md`** — append-only chronological journal. Format: `## [YYYY-MM-DD] action | description` followed by a paragraph. Add an entry for every ingest, lint, and significant query.
+```bash
+cat .openclaw-wiki/pending-ingest.json
+```
+
+For each `changedSourceIds[i]`:
+1. Read the corresponding `sources/bridge-<slug>.md` page (the slug is in the source id after the `source.` prefix)
+2. Apply the normal ingest discipline: read fully, identify entities/concepts/themes, update or create the relevant `entities/`, `concepts/`, or `syntheses/` pages
+3. Add cross-references using `[[wiki-link]]` syntax
+4. Append a one-line entry to `.openclaw-wiki/log.jsonl` (use Bash to append a JSON line)
+
+After processing all changed sources, **delete the marker file** so it isn't reprocessed:
+
+```bash
+rm .openclaw-wiki/pending-ingest.json
+```
+
+Then handle whatever the user actually messaged about.
+
+If you can't process all sources in one wake-up (e.g., there are too many), process as many as you can, leave the marker file in place, and Janus will continue on the next wake.
+
+## OpenClaw-compatible vault layout
+
+This vault is OpenClaw-compatible. The directory structure is:
+
+| Dir | Page kind | What lives here |
+|---|---|---|
+| `entities/` | entity | People, businesses, products, tools, named things |
+| `concepts/` | concept | Frameworks, methodologies, mental models |
+| `syntheses/` | synthesis | Narrative arcs, time-bounded reflections, executive summaries |
+| `sources/` | source | Raw immutable bridge-imported pages and manual drops |
+| `reports/` | report | Auto-generated dashboards (lint, contradictions) |
+
+Every page has frontmatter with **OpenClaw schema**:
+
+```yaml
+---
+id: entity.dom-ingleston              # required: <kind>.<slug>
+pageType: entity                      # required: must match directory
+title: Dom Ingleston
+sourceIds: [bridge-source-id-1, ...]  # citations
+claims: []                            # structured claims — see below
+contradictions: []                    # free-form contradiction notes
+questions: []                         # open questions about this entity
+confidence: 0.7                       # 0..1, used by lint (low-confidence < 0.5)
+status: active
+updatedAt: 2026-04-09T12:00:00.000Z
+---
+```
+
+When you create a new page: include all the above fields. When you update one: bump `updatedAt`.
+
+## Structured claims (the high-leverage feature)
+
+Each page can carry an array of structured claims. **A claim is a single factual assertion about reality** that you can cite back to specific sources. This is much more powerful than burying claims in prose because:
+
+- The lint catches contradictions automatically (same claim id, different text)
+- The lint catches stale claims (>90 days unrefreshed)
+- The lint catches missing-evidence claims
+- The agent-digest.json surfaces top claims per page so future queries are fast
+- The claims.jsonl is grep-friendly for fact-checking
+
+**Schema:**
+
+```yaml
+claims:
+  - id: dom.ritalin.transformative          # stable id, kebab-case, dot-namespaced
+    text: "Dom describes Ritalin as transformative for executive function"
+    status: supported                       # supported|contested|contradicted|refuted|superseded
+    confidence: 0.9                         # 0..1
+    evidence:
+      - sourceId: source.global-memory-active--groups-global-memory-2026-03-21-coaching-quincy-onboarding
+        path: groups/global/memory/2026-03-21-coaching-quincy-onboarding.md
+        lines: "12-18"
+        weight: 1.0
+        note: "Direct quote from Dom in March call"
+    updatedAt: 2026-04-09T12:00:00.000Z
+```
+
+**When to extract a claim:**
+
+- The page asserts something concrete about reality (not opinion, not speculation)
+- The assertion can be cited to at least one source
+- It's the kind of thing you'd want to flag if it later turned out to be wrong
+
+**When NOT to:**
+
+- Don't extract every sentence — only the load-bearing assertions
+- Don't extract opinions or stylistic preferences
+- Don't extract things that are obviously self-evident
+
+**Update discipline:** when a new source contradicts an existing claim, don't silently overwrite. Either:
+- Mark the old claim `status: superseded` and add a new one
+- Mark both `status: contested` and let the lint surface the conflict
+- Update the existing claim and bump `updatedAt`
+
+The lint will tell you when claims are stale or unsupported. Run `npm run wiki:lint` to see the report at `reports/lint.md`.
+
+## Two special files (read FIRST on any query)
+
+- **`.openclaw-wiki/cache/agent-digest.json`** — pre-computed compact summary of every page in the wiki. Contains pageCounts, claimCount, claimHealth, contradictionClusters, and a `pages[]` array where each entry has `{id, title, kind, path, sourceIds, freshnessLevel, claimCount, topClaims}`. **Always read this FIRST when answering a query.** It tells you which pages are relevant without grepping markdown. Only drill into specific pages after locating them in the digest. The digest is auto-rewritten by every compile pass.
+- **`.openclaw-wiki/cache/claims.jsonl`** — one structured claim per line, grep-friendly. Use this when fact-checking or looking for contradictions. Each line: `{id, pageId, pageTitle, pageKind, pagePath, text, status, confidence, evidence, freshnessLevel}`.
+- **`index.md`** — human-readable catalog (auto-generated by compile from each page's title). Useful for browsing in Obsidian.
+- **`.openclaw-wiki/log.jsonl`** — append-only chronological event log. One JSON object per line: `{ "ts": "ISO", "type": "ingest|compile|lint|note", "data": {...} }`. Append after every ingest, lint, and significant write using a Bash command.
 
 ## Three operations
 
