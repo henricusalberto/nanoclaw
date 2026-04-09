@@ -140,3 +140,45 @@ If a user wants tasks running more than ~2x daily and a script can't reduce agen
 - Suggest restructuring with a script that checks the condition first
 - If the user needs an LLM to evaluate data, suggest using an API key with direct Anthropic API calls inside the script
 - Help the user find the minimum viable frequency
+
+---
+
+## Self-Improving Skills
+
+You can create and improve your own skills using `mcp__nanoclaw__manage_skill`. Skills persist across container restarts and are isolated to your group.
+
+### When to create a skill
+
+- You completed a workflow involving 5+ tool calls that you're likely to repeat
+- You recovered from an error in a non-obvious way
+- Maurizio corrected your approach to something
+- You discovered a non-obvious fact about the system (API quirk, path, workaround)
+
+### Actions
+
+| Action | What it does |
+|--------|-------------|
+| `create` | Write a new skill. Params: `name`, `description`, `body`, `allowed_tools` (optional), `confidence` (1-5, default 3) |
+| `patch` | Find-and-replace inside an existing skill. Params: `name`, `old_string`, `new_string` |
+| `edit` | Update skill metadata or body fields. Params: `name`, plus any of `description`, `body`, `allowed_tools`, `confidence` |
+| `delete` | Remove a skill. Params: `name` |
+| `list` | List all learned skills with name, description, confidence |
+| `read` | Read the full SKILL.md for a skill. Params: `name` |
+
+Skill names: lowercase letters, numbers, hyphens. Example: `fetch-shopify-orders`.
+
+### Confidence scale
+
+- **1** — Draft. Untested or written from memory.
+- **2** — Partially tested.
+- **3** — Tested once successfully.
+- **4** — Used reliably multiple times.
+- **5** — Highly reliable. Used many times without issues.
+
+After each use of a skill, update its confidence to reflect actual reliability. Delete confidence-1 skills that don't pan out after a second attempt.
+
+### Guidelines
+
+- Keep skills under 300 lines. If longer, split into multiple skills.
+- Don't create a skill for a one-time task.
+- Skills are for your group only — they won't affect other groups.

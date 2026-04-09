@@ -178,6 +178,19 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+
+  // Overlay learned skills from the group workspace on top of built-ins.
+  // Copied second so they override any built-in with the same name.
+  const learnedSkillsSrc = path.join(groupDir, 'skills');
+  if (fs.existsSync(learnedSkillsSrc)) {
+    for (const skillDir of fs.readdirSync(learnedSkillsSrc)) {
+      const srcDir = path.join(learnedSkillsSrc, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      const dstDir = path.join(skillsDst, skillDir);
+      fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
+
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',

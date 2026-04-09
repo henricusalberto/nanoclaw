@@ -503,6 +503,203 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// ─── manage_skill ────────────────────────────────────────────────────────────
+
+const LEARNED_SKILLS_DIR = '/workspace/group/skills';
+const SESSION_SKILLS_DIR = '/home/node/.claude/skills';
+
+function validateSkillName(name: string): void {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+    throw new Error(
+      `Invalid skill name "${name}". Use lowercase letters, digits, and hyphens only (max 64 chars).`,
+    );
+  }
+}
+
+function buildSkillContent(fields: {
+  name: string;
+  description: string;
+  body: string;
+  allowed_tools?: string;
+  confidence?: number;
+  created?: string;
+  updated?: string;
+}): string {
+  const now = new Date().toISOString();
+  const frontmatter: Record<string, string | number | boolean> = {
+    name: fields.name,
+    description: fields.description,
+    learned: true,
+    confidence: fields.confidence ?? 3,
+    created: fields.created ?? now,
+    updated: fields.updated ?? now,
+  };
+  if (fields.allowed_tools) {
+    frontmatter['allowed-tools'] = fields.allowed_tools;
+  }
+  const yamlLines = Object.entries(frontmatter).map(([k, v]) => {
+    if (typeof v === 'string' && (v.includes(':') || v.includes('#'))) {
+      return `${k}: "${v.replace(/"/g, '\\"')}"`;
+    }
+    return `${k}: ${v}`;
+  });
+  return `---\n${yamlLines.join('\n')}\n---\n\n${fields.body}`;
+}
+
+function parseFrontmatter(content: string): {
+  frontmatter: Record<string, string | number | boolean>;
+  body: string;
+} {
+  if (!content.startsWith('---')) return { frontmatter: {}, body: content };
+  const end = content.indexOf('\n---', 3);
+  if (end === -1) return { frontmatter: {}, body: content };
+  const yamlBlock = content.slice(3, end).trim();
+  const body = content.slice(end + 4).trimStart();
+  const frontmatter: Record<string, string | number | boolean> = {};
+  for (const line of yamlBlock.split('\n')) {
+    const colon = line.indexOf(':');
+    if (colon === -1) continue;
+    const key = line.slice(0, colon).trim();
+    let val: string = line.slice(colon + 1).trim();
+    if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+    frontmatter[key] = val === 'true' ? true : val === 'false' ? false : isNaN(Number(val)) ? val : Number(val);
+  }
+  return { frontmatter, body };
+}
+
+function writeSkillFiles(skillPath: string, sessionPath: string, content: string): void {
+  // Atomic write to both locations
+  for (const dest of [skillPath, sessionPath]) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const tmp = `${dest}.tmp`;
+    fs.writeFileSync(tmp, content, 'utf8');
+    fs.renameSync(tmp, dest);
+  }
+}
+
+function fuzzyReplace(content: string, oldStr: string, newStr: string): string | null {
+  // Strategy 1: exact match
+  if (content.includes(oldStr)) {
+    return content.replace(oldStr, newStr);
+  }
+  // Strategy 2: whitespace-normalized match
+  const normalize = (s: string) => s.replace(/[ \t]+/g, ' ').trim();
+  const normContent = content.split('\n').map(normalize).join('\n');
+  const normOld = oldStr.split('\n').map(normalize).join('\n');
+  if (normContent.includes(normOld)) {
+    const idx = normContent.indexOf(normOld);
+    return content.slice(0, idx) + newStr + content.slice(idx + normOld.length);
+  }
+  // Strategy 3: indentation-flexible match
+  const strip = (s: string) => s.split('\n').map((l) => l.trimStart()).join('\n');
+  const strippedContent = strip(content);
+  const strippedOld = strip(oldStr);
+  if (strippedContent.includes(strippedOld)) {
+    const idx = strippedContent.indexOf(strippedOld);
+    return content.slice(0, idx) + newStr + content.slice(idx + strippedOld.length);
+  }
+  return null;
+}
+
+server.tool(
+  'manage_skill',
+  'Create, patch, edit, delete, list, or read learned skills. Skills are saved to the group workspace and persist across container restarts.',
+  {
+    action: z.enum(['create', 'patch', 'edit', 'delete', 'list', 'read']),
+    name: z.string().optional().describe('Skill name (lowercase-hyphenated)'),
+    description: z.string().optional().describe('One-line description for skill discovery'),
+    body: z.string().optional().describe('Markdown body content (everything after frontmatter)'),
+    allowed_tools: z.string().optional().describe('Space-separated allowed-tools value'),
+    confidence: z.number().int().min(1).max(5).optional().describe('1=draft, 3=tested, 5=reliable'),
+    old_string: z.string().optional().describe('String to find (patch action)'),
+    new_string: z.string().optional().describe('Replacement string (patch action)'),
+  },
+  async (args) => {
+    const { action } = args;
+
+    if (action === 'list') {
+      if (!fs.existsSync(LEARNED_SKILLS_DIR)) {
+        return { content: [{ type: 'text' as const, text: 'No learned skills yet.' }] };
+      }
+      const skills = fs.readdirSync(LEARNED_SKILLS_DIR).filter((d) => {
+        const p = path.join(LEARNED_SKILLS_DIR, d, 'SKILL.md');
+        return fs.existsSync(p);
+      });
+      if (skills.length === 0) {
+        return { content: [{ type: 'text' as const, text: 'No learned skills yet.' }] };
+      }
+      const lines = skills.map((name) => {
+        const content = fs.readFileSync(path.join(LEARNED_SKILLS_DIR, name, 'SKILL.md'), 'utf8');
+        const { frontmatter } = parseFrontmatter(content);
+        const desc = frontmatter.description ?? '';
+        const conf = frontmatter.confidence ?? '?';
+        return `- **${name}** (confidence: ${conf}) — ${desc}`;
+      });
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    }
+
+    if (!args.name) throw new Error('name is required');
+    validateSkillName(args.name);
+    const skillDir = path.join(LEARNED_SKILLS_DIR, args.name);
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    const sessionFile = path.join(SESSION_SKILLS_DIR, args.name, 'SKILL.md');
+
+    if (action === 'read') {
+      if (!fs.existsSync(skillFile)) throw new Error(`Skill "${args.name}" not found`);
+      return { content: [{ type: 'text' as const, text: fs.readFileSync(skillFile, 'utf8') }] };
+    }
+
+    if (action === 'create') {
+      if (fs.existsSync(skillFile)) throw new Error(`Skill "${args.name}" already exists. Use edit or patch to modify it.`);
+      if (!args.description) throw new Error('description is required');
+      if (!args.body) throw new Error('body is required');
+      const content = buildSkillContent({ name: args.name, description: args.description, body: args.body, allowed_tools: args.allowed_tools, confidence: args.confidence });
+      writeSkillFiles(skillFile, sessionFile, content);
+      return { content: [{ type: 'text' as const, text: `Skill "${args.name}" created.` }] };
+    }
+
+    if (!fs.existsSync(skillFile)) throw new Error(`Skill "${args.name}" not found`);
+    const existing = fs.readFileSync(skillFile, 'utf8');
+
+    if (action === 'delete') {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      const sessionDir = path.join(SESSION_SKILLS_DIR, args.name);
+      if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
+      return { content: [{ type: 'text' as const, text: `Skill "${args.name}" deleted.` }] };
+    }
+
+    if (action === 'patch') {
+      if (!args.old_string) throw new Error('old_string is required');
+      if (args.new_string === undefined) throw new Error('new_string is required');
+      const result = fuzzyReplace(existing, args.old_string, args.new_string);
+      if (!result) throw new Error(`old_string not found in skill "${args.name}". Use read to inspect current content.`);
+      const { frontmatter } = parseFrontmatter(result);
+      const updated = result.replace(
+        /^updated: .+$/m,
+        `updated: ${new Date().toISOString()}`,
+      );
+      writeSkillFiles(skillFile, sessionFile, updated.includes('updated:') ? updated : result);
+      return { content: [{ type: 'text' as const, text: `Skill "${args.name}" patched.` }] };
+    }
+
+    if (action === 'edit') {
+      const { frontmatter, body } = parseFrontmatter(existing);
+      const updated = buildSkillContent({
+        name: args.name,
+        description: (args.description ?? String(frontmatter.description ?? '')),
+        body: args.body ?? body,
+        allowed_tools: args.allowed_tools ?? String(frontmatter['allowed-tools'] ?? ''),
+        confidence: args.confidence ?? Number(frontmatter.confidence ?? 3),
+        created: String(frontmatter.created ?? new Date().toISOString()),
+      });
+      writeSkillFiles(skillFile, sessionFile, updated);
+      return { content: [{ type: 'text' as const, text: `Skill "${args.name}" updated.` }] };
+    }
+
+    throw new Error(`Unknown action: ${action}`);
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
