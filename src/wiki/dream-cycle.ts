@@ -85,7 +85,7 @@ export async function runDreamCycle(
     } catch (err) {
       // Compile failure must not break the dream cycle — the shadow
       // proposals are already on disk and Janus can still review them.
-      appendWikiLogEvent(vaultPath, 'migration', {
+      appendWikiLogEvent(vaultPath, 'compile', {
         phase: 'dream-cycle-compile',
         error: (err as Error).message,
       });

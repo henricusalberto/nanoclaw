@@ -122,6 +122,32 @@ export function appendMetricsSnapshot(
   fs.appendFileSync(file, JSON.stringify(metrics) + '\n');
 }
 
+/**
+ * Diff-gated metrics writer used by compile. Skips the append when
+ * the structurally meaningful fields match the most recent snapshot
+ * (compileTimeMs and lintTimeMs are ignored — they jitter on every
+ * run and would defeat the gate). Caps unbounded growth from frequent
+ * container spawns.
+ */
+export function appendMetricsSnapshotIfChanged(
+  vaultPath: string,
+  metrics: VolumeMetrics,
+): boolean {
+  const history = readMetricsHistory(vaultPath);
+  const last = history[history.length - 1];
+  if (
+    last &&
+    last.pageCount === metrics.pageCount &&
+    last.claimCount === metrics.claimCount &&
+    last.bytesMarkdown === metrics.bytesMarkdown &&
+    last.pagesAdded30d === metrics.pagesAdded30d
+  ) {
+    return false;
+  }
+  appendMetricsSnapshot(vaultPath, metrics);
+  return true;
+}
+
 export function readMetricsHistory(vaultPath: string): VolumeMetrics[] {
   const file = metricsPath(vaultPath);
   if (!fs.existsSync(file)) return [];
@@ -141,15 +167,37 @@ export function readMetricsHistory(vaultPath: string): VolumeMetrics[] {
 // Report writer
 // =============================================================================
 
-export function writeVolumeReport(
+/**
+ * Diff-gated volume report writer used by compile. Skips the disk
+ * write when the rendered markdown matches the on-disk version
+ * (modulo the timestamp footer). Returns true when something changed.
+ */
+export function writeVolumeReportIfChanged(
   vaultPath: string,
   metrics: VolumeMetrics,
   recommendation: VolumeRecommendation,
-): string {
-  const reportDir = path.join(vaultPath, 'reports');
-  fs.mkdirSync(reportDir, { recursive: true });
-  const reportPath = path.join(reportDir, 'volume.md');
+): boolean {
+  const next = renderVolumeReport(metrics, recommendation);
+  const reportPath = path.join(vaultPath, 'reports', 'volume.md');
+  let existing = '';
+  try {
+    existing = fs.readFileSync(reportPath, 'utf-8');
+  } catch {
+    /* missing — fall through and write */
+  }
+  // Strip the trailing "_Last sampled at <ts>_" line from both sides so
+  // an unchanged-vault recompile is a true no-op.
+  const stripTs = (s: string) => s.replace(/_Last sampled at[^_]*_\n?/, '');
+  if (stripTs(existing) === stripTs(next)) return false;
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+  atomicWriteFile(reportPath, next);
+  return true;
+}
 
+function renderVolumeReport(
+  metrics: VolumeMetrics,
+  recommendation: VolumeRecommendation,
+): string {
   const lines: string[] = [];
   lines.push('---');
   lines.push('id: report.volume');
@@ -183,7 +231,16 @@ export function writeVolumeReport(
   lines.push('');
   lines.push(`_Last sampled at ${metrics.ts}_`);
   lines.push('');
+  return lines.join('\n');
+}
 
-  atomicWriteFile(reportPath, lines.join('\n'));
+export function writeVolumeReport(
+  vaultPath: string,
+  metrics: VolumeMetrics,
+  recommendation: VolumeRecommendation,
+): string {
+  const reportPath = path.join(vaultPath, 'reports', 'volume.md');
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+  atomicWriteFile(reportPath, renderVolumeReport(metrics, recommendation));
   return reportPath;
 }

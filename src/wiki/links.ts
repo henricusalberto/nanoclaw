@@ -21,7 +21,7 @@ export type LinkType =
   | 'derives-from'
   | 'works-with';
 
-export const LINK_TYPES: readonly LinkType[] = [
+const LINK_TYPES: readonly LinkType[] = [
   'cites',
   'mentions',
   'contradicts',

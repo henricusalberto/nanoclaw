@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { atomicWriteFile } from './fs-util.js';
-import { extractWikiLinks, WikiPageFrontmatter } from './markdown.js';
+import { extractWikiLinks, getPageTitle } from './markdown.js';
 import { vaultPaths } from './paths.js';
 import {
   checkDreamBudget,
@@ -167,7 +167,9 @@ export async function enrichPages(
           check.reason ?? 'dream budget exhausted',
           check.state,
         );
-        continue;
+        // Once we've hit the cap, every remaining candidate would
+        // re-read the budget file and re-block. Stop iterating.
+        break;
       }
 
       // Step 3: Tier 1 LLM. Adapter returns an empty result on any
@@ -324,7 +326,7 @@ function selectNeighbours(
     if (p.filePath === page.filePath) continue;
     if (linkedBasenames.has(p.basename)) {
       out.push({
-        title: fmTitle(p.frontmatter, p.basename),
+        title: getPageTitle(p.frontmatter, p.basename),
         kind: p.kind ?? 'unknown',
       });
     }
@@ -337,17 +339,11 @@ function selectNeighbours(
       if (p.dir !== page.dir) continue;
       if (linkedBasenames.has(p.basename)) continue; // already added
       out.push({
-        title: fmTitle(p.frontmatter, p.basename),
+        title: getPageTitle(p.frontmatter, p.basename),
         kind: p.kind ?? 'unknown',
       });
       if (out.length >= 30) break;
     }
   }
   return out;
-}
-
-function fmTitle(fm: WikiPageFrontmatter, fallback: string): string {
-  return typeof fm.title === 'string' && fm.title.trim()
-    ? fm.title.trim()
-    : fallback;
 }

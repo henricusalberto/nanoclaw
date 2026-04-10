@@ -61,15 +61,21 @@ export interface SnapshotInput {
  * to snapshot.
  */
 export function snapshotBeforeWrite(input: SnapshotInput): string | null {
-  if (!fs.existsSync(input.pagePath)) return null;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(input.pagePath, 'utf-8');
+  } catch {
+    // Page didn't exist (first write) or unreadable — nothing to snapshot.
+    return null;
+  }
   let parsed;
   try {
-    parsed = parseWikiPage(fs.readFileSync(input.pagePath, 'utf-8'));
+    parsed = parseWikiPage(raw);
   } catch {
     // Malformed frontmatter — don't snapshot, but don't fail the write.
     return null;
   }
-  const slug = pageSlugFromPath(input.pagePath, parsed.frontmatter);
+  const slug = pageSlugFromPath(input.pagePath);
   const dir = versionsDir(input.vaultPath, slug);
   fs.mkdirSync(dir, { recursive: true });
   const ts = Date.now();
@@ -95,9 +101,13 @@ export function snapshotBeforeWrite(input: SnapshotInput): string | null {
  */
 export function listVersions(vaultPath: string, slug: string): VersionRecord[] {
   const dir = versionsDir(vaultPath, slug);
-  if (!fs.existsSync(dir)) return [];
-  const files = fs
-    .readdirSync(dir)
+  let dirEntries: string[];
+  try {
+    dirEntries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const files = dirEntries
     .filter((f) => f.endsWith('.json'))
     .sort((a, b) => parseInt(b) - parseInt(a));
   const out: VersionRecord[] = [];
@@ -123,7 +133,6 @@ export function readVersion(
   ts: number,
 ): VersionRecord | null {
   const file = path.join(versionsDir(vaultPath, slug), `${ts}.json`);
-  if (!fs.existsSync(file)) return null;
   try {
     return JSON.parse(fs.readFileSync(file, 'utf-8')) as VersionRecord;
   } catch {
@@ -173,17 +182,13 @@ export function revertToVersion(params: {
 }
 
 /**
- * Resolve a page's audit slug from its on-disk basename. We use the
- * basename (lower-cased) rather than the frontmatter `id` because:
- *   - Basename is stable across migrations (Phase 3 only changes dirs)
- *   - It's filesystem-safe with no escaping needed
- *   - Multiple pages with the same id (rare, but possible mid-migration)
- *     don't collide on disk
+ * Resolve a page's audit slug from its on-disk basename. We key on
+ * basename rather than frontmatter `id` because basename is stable
+ * across Phase 3 migrations (which only change directories), is
+ * filesystem-safe without escaping, and doesn't collide when two
+ * mid-migration pages temporarily share an `id`.
  */
-export function pageSlugFromPath(
-  pagePath: string,
-  _frontmatter: WikiPageFrontmatter,
-): string {
+function pageSlugFromPath(pagePath: string): string {
   return path.basename(pagePath, '.md').toLowerCase();
 }
 
@@ -198,14 +203,13 @@ function versionsDir(vaultPath: string, slug: string): string {
 function pruneOldVersions(dir: string): void {
   let files: string[];
   try {
-    files = fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith('.json'))
-      .sort((a, b) => parseInt(b) - parseInt(a));
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
   } catch {
     return;
   }
+  // Cheap path: nothing to prune. Skip the sort entirely.
   if (files.length <= KEEP_VERSIONS_PER_PAGE) return;
+  files.sort((a, b) => parseInt(b) - parseInt(a));
   for (const f of files.slice(KEEP_VERSIONS_PER_PAGE)) {
     try {
       fs.rmSync(path.join(dir, f));

@@ -17,17 +17,16 @@
  * `timeline-missing-attribution` lint check passes automatically.
  */
 
-import fs from 'fs';
 import path from 'path';
 
 import { readWikiLogEvents } from './log.js';
 import {
-  parseWikiPage,
+  getPageTitle,
+  ParsedWikiPage,
   readWikiPage,
   replaceManagedBlock,
-  serializeWikiPage,
-  WikiPageFrontmatter,
   WikiPageKind,
+  writeWikiPage,
 } from './markdown.js';
 import { VaultPageRecord } from './vault-walk.js';
 
@@ -59,6 +58,16 @@ export interface ProjectTimelinesResult {
   durationMs: number;
 }
 
+export interface ProjectTimelinesOptions {
+  /**
+   * Map of `filePath → ParsedWikiPage` already held by the caller
+   * (compile.ts maintains this). When supplied we read the post-related
+   * body straight from memory instead of re-reading the file from disk
+   * once per eligible page.
+   */
+  parsedByPath?: Map<string, ParsedWikiPage>;
+}
+
 /**
  * Walk the vault's pages + log events, compute a timeline per eligible
  * page, and rewrite the managed block in place. Pages that don't qualify
@@ -68,6 +77,7 @@ export interface ProjectTimelinesResult {
 export function projectTimelines(
   vaultPath: string,
   pages: VaultPageRecord[],
+  opts: ProjectTimelinesOptions = {},
 ): ProjectTimelinesResult {
   const startedAt = Date.now();
   const result: ProjectTimelinesResult = {
@@ -80,10 +90,6 @@ export function projectTimelines(
   // Build lookup indexes once so each page's projection is O(sources+claims+events).
   const sourcePages = pages.filter((p) => p.kind === 'source');
   const logEvents = readLogEvents(vaultPath);
-  const pageById = new Map<string, VaultPageRecord>();
-  for (const p of pages) {
-    if (p.frontmatter.id) pageById.set(p.frontmatter.id, p);
-  }
 
   for (const page of pages) {
     if (!page.kind || !TIMELINE_KINDS.has(page.kind)) continue;
@@ -98,18 +104,33 @@ export function projectTimelines(
     result.entriesTotal += entries.length;
 
     const blockBody = renderTimelineBlock(entries);
-    // Re-read the page from disk: lint/compile may have rewritten other
-    // managed blocks (related) between the VaultPageRecord snapshot and
-    // now, so the in-memory `body` could be stale.
-    const parsed = readWikiPage(page.filePath);
+    // Prefer the in-memory post-related body when the caller has it;
+    // fall back to a fresh disk read for standalone runs (CLI smoke
+    // tests, future tools).
+    const parsed =
+      opts.parsedByPath?.get(page.filePath) ?? readWikiPage(page.filePath);
     const newBody = replaceManagedBlock(
       parsed.body,
       MANAGED_BLOCK_NAME,
       blockBody,
     );
     if (newBody === parsed.body) continue;
-    const newContent = serializeWikiPage(parsed.frontmatter, newBody);
-    fs.writeFileSync(page.filePath, newContent);
+    // Auto-managed-block edit only — skip the version snapshot to
+    // avoid amplifying writes by ~N pages per compile pass.
+    writeWikiPage(page.filePath, parsed.frontmatter, newBody, {
+      writtenBy: 'compile',
+      reason: 'timeline projection',
+      skipSnapshot: true,
+    });
+    // Keep the parsed-cache in sync so any later compile step sees
+    // the post-projection body.
+    if (opts.parsedByPath) {
+      opts.parsedByPath.set(page.filePath, {
+        frontmatter: parsed.frontmatter,
+        body: newBody,
+        raw: parsed.raw,
+      });
+    }
     result.rewrittenCount++;
   }
 
@@ -148,7 +169,7 @@ function buildEntriesForPage(inputs: EntrySourceInputs): TimelineEntry[] {
     if (!date) continue;
     entries.push({
       date,
-      text: `source ingested: ${fmTitle(fm, source.basename)}`,
+      text: `source ingested: ${getPageTitle(fm, source.basename)}`,
       who: 'bridge',
       context: source.basename,
     });
@@ -240,12 +261,6 @@ function coerceDate(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const m = /^(\d{4}-\d{2}-\d{2})/.exec(value);
   return m ? m[1] : null;
-}
-
-function fmTitle(fm: WikiPageFrontmatter, fallback: string): string {
-  return typeof fm.title === 'string' && fm.title.trim()
-    ? fm.title.trim()
-    : fallback;
 }
 
 function truncate(s: string, max: number): string {

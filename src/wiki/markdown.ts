@@ -242,6 +242,27 @@ export interface WriteWikiPageOptions {
   writtenBy?: string;
   /** Short reason for the change. */
   reason?: string;
+  /**
+   * When true, skip the version-snapshot hook entirely. Used by
+   * compile-driven managed-block rewrites (related/timeline) where
+   * the only thing changing is auto-generated content — snapshotting
+   * those would amplify writes by ~50× per compile pass.
+   */
+  skipSnapshot?: boolean;
+}
+
+/**
+ * Return a page's display title, falling back to the supplied default
+ * (typically its basename) when the frontmatter title is missing or
+ * blank. Used by every module that needs a human-readable label.
+ */
+export function getPageTitle(
+  fm: WikiPageFrontmatter,
+  fallback: string,
+): string {
+  return typeof fm.title === 'string' && fm.title.trim()
+    ? fm.title.trim()
+    : fallback;
 }
 
 export function writeWikiPage(
@@ -250,7 +271,7 @@ export function writeWikiPage(
   body: string,
   opts: WriteWikiPageOptions = {},
 ): void {
-  if (writeWikiPageHook) {
+  if (writeWikiPageHook && !opts.skipSnapshot) {
     try {
       writeWikiPageHook({
         filePath,

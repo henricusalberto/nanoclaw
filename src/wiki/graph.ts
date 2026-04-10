@@ -56,7 +56,7 @@ const EMPTY_GRAPH: WikiGraph = {
   pageCount: 0,
 };
 
-export function getGraphIndexPath(vaultPath: string): string {
+function getGraphIndexPath(vaultPath: string): string {
   return path.join(vaultPaths(vaultPath).stateDir, 'graph-index.json');
 }
 
@@ -139,6 +139,26 @@ export function writeGraphIndex(vaultPath: string, graph: WikiGraph): void {
     getGraphIndexPath(vaultPath),
     JSON.stringify(graph, null, 2) + '\n',
   );
+}
+
+/**
+ * Diff-gated writer used by the compile hot path. Skips the disk write
+ * (and the bridge churn it would cause) when the graph's structural
+ * content matches the on-disk cache. Compares everything except
+ * `builtAt`, since the timestamp would defeat the diff every time.
+ */
+export function writeGraphIndexIfChanged(
+  vaultPath: string,
+  graph: WikiGraph,
+): boolean {
+  const existing = readGraphIndex(vaultPath);
+  const same =
+    existing.pageCount === graph.pageCount &&
+    JSON.stringify(existing.nodes) === JSON.stringify(graph.nodes) &&
+    JSON.stringify(existing.outEdges) === JSON.stringify(graph.outEdges);
+  if (same) return false;
+  writeGraphIndex(vaultPath, graph);
+  return true;
 }
 
 export function readGraphIndex(vaultPath: string): WikiGraph {

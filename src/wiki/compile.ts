@@ -23,6 +23,7 @@ import {
 import { lintWiki } from './lint.js';
 import { appendWikiLogEvent } from './log.js';
 import {
+  ParsedWikiPage,
   parseWikiPage,
   readWikiPage,
   replaceManagedBlock,
@@ -30,7 +31,7 @@ import {
   WikiPageKind,
   writeWikiPage,
 } from './markdown.js';
-import { buildGraph, writeGraphIndex } from './graph.js';
+import { buildGraph, writeGraphIndexIfChanged } from './graph.js';
 import {
   computeRelatedBuckets,
   PageSummary,
@@ -38,12 +39,17 @@ import {
   summarizePage,
 } from './related.js';
 import { projectTimelines } from './timeline-projection.js';
-import { collectVaultPages, VAULT_DIRS as WALKED_DIRS } from './vault-walk.js';
 import {
-  appendMetricsSnapshot,
+  collectVaultPages,
+  VAULT_DIRS as WALKED_DIRS,
+  VaultPageRecord,
+} from './vault-walk.js';
+import {
+  appendMetricsSnapshotIfChanged,
   classifyAll,
+  ThresholdLevel,
   VolumeMetrics,
-  writeVolumeReport,
+  writeVolumeReportIfChanged,
 } from './volume-checker.js';
 
 // Compile walks VAULT_DIRS plus reports/ (which lint excludes to avoid
@@ -71,10 +77,9 @@ export interface CompileResult {
   /** Phase 4: compile-time managed-block projections. */
   timelinePagesRewritten: number;
   timelineEntriesTotal: number;
-  /** Phase 5: graph + volume checker outputs. */
   graphNodes: number;
   graphEdges: number;
-  volumeLevel: 'OK' | 'WATCH' | 'RECOMMEND' | 'BUILD NOW';
+  volumeLevel: ThresholdLevel;
   durationMs: number;
 }
 
@@ -82,40 +87,73 @@ export interface CompileResult {
 // Page collection
 // =============================================================================
 
-function walkVault(
-  vaultPath: string,
-): { absPath: string; kind: WikiPageKind }[] {
-  const results: { absPath: string; kind: WikiPageKind }[] = [];
-  for (const { dir, kind } of VAULT_DIRS) {
-    const dirPath = path.join(vaultPath, dir);
-    if (!fs.existsSync(dirPath)) continue;
-    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-      results.push({ absPath: path.join(dirPath, entry.name), kind });
-    }
+/**
+ * Single vault walk that produces BOTH the related-block-friendly
+ * `PageSummary[]` AND the timeline/graph-friendly `VaultPageRecord[]`
+ * from one set of disk reads. Previously compile walked the vault
+ * twice (once via its own `walkVault` + `summarizePage`, once via the
+ * shared `collectVaultPages`) — which doubled file reads on every spawn.
+ *
+ * `bytesByPath` is captured during the same walk so the volume
+ * checker doesn't have to `statSync` every page a third time.
+ *
+ * Reports/ is walked too even though `collectVaultPages` skips it
+ * (lint excludes its own output); compile still wants the reports
+ * folded into digest + indexes.
+ */
+function collectAllPageData(vaultPath: string): {
+  records: VaultPageRecord[];
+  summaries: PageSummary[];
+  parsedByPath: Map<string, ParsedWikiPage>;
+  bytesByPath: Map<string, number>;
+} {
+  const records = [
+    ...collectVaultPages(vaultPath),
+    ...readReportRecords(vaultPath),
+  ];
+  const summaries: PageSummary[] = [];
+  const parsedByPath = new Map<string, ParsedWikiPage>();
+  const bytesByPath = new Map<string, number>();
+  for (const r of records) {
+    const parsed: ParsedWikiPage = {
+      frontmatter: r.frontmatter,
+      body: r.body,
+      raw: '', // not needed downstream; serializer reconstructs
+    };
+    parsedByPath.set(r.filePath, parsed);
+    bytesByPath.set(r.filePath, Buffer.byteLength(r.body, 'utf8'));
+    const summary = summarizePage(r.filePath, vaultPath, parsed);
+    if (summary) summaries.push(summary);
   }
-  return results;
+  return { records, summaries, parsedByPath, bytesByPath };
 }
 
-function collectPageSummaries(vaultPath: string): {
-  summaries: PageSummary[];
-  parsedByPath: Map<string, ReturnType<typeof parseWikiPage>>;
-} {
-  const summaries: PageSummary[] = [];
-  const parsedByPath = new Map<string, ReturnType<typeof parseWikiPage>>();
-  for (const { absPath } of walkVault(vaultPath)) {
-    let parsed;
-    try {
-      parsed = readWikiPage(absPath);
-    } catch {
-      continue;
-    }
-    const summary = summarizePage(absPath, vaultPath, parsed);
-    if (!summary) continue;
-    summaries.push(summary);
-    parsedByPath.set(absPath, parsed);
+function readReportRecords(vaultPath: string): VaultPageRecord[] {
+  const dir = path.join(vaultPath, 'reports');
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
   }
-  return { summaries, parsedByPath };
+  const out: VaultPageRecord[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (entry.name === 'index.md') continue;
+    const filePath = path.join(dir, entry.name);
+    const parsed = readWikiPage(filePath);
+    out.push({
+      filePath,
+      relativePath: path.relative(vaultPath, filePath),
+      basename: path.basename(entry.name, '.md').toLowerCase(),
+      dir: 'reports',
+      kind: parsed.frontmatter.pageType,
+      expectedKind: 'report',
+      frontmatter: parsed.frontmatter,
+      body: parsed.body,
+    });
+  }
+  return out;
 }
 
 // =============================================================================
@@ -163,6 +201,9 @@ function refreshRelatedBlocks(
     writeWikiPage(page.filePath, parsed.frontmatter, newBody, {
       writtenBy: 'compile',
       reason: 'related-block refresh',
+      // Auto-managed-block edit only — skip the per-write version snapshot
+      // to avoid ~50 writes per compile pass.
+      skipSnapshot: true,
     });
     rewritten++;
   }
@@ -255,7 +296,9 @@ function refreshIndexes(vaultPath: string, summaries: PageSummary[]): number {
 
 export async function compileWiki(vaultPath: string): Promise<CompileResult> {
   const startedAt = Date.now();
-  const { summaries, parsedByPath } = collectPageSummaries(vaultPath);
+  // Single vault walk shared by every downstream pass below.
+  const { records, summaries, parsedByPath, bytesByPath } =
+    collectAllPageData(vaultPath);
 
   const rewrittenCount = refreshRelatedBlocks(
     vaultPath,
@@ -264,16 +307,14 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
   );
   const indexesRefreshed = refreshIndexes(vaultPath, summaries);
 
-  // Phase 4: project chronological timelines onto entity/person/company/
-  // project/deal pages. Walks source pages, claims, and log events and
-  // writes a managed block per page. Re-reads pages from disk inside the
-  // projector so stale bodies from refreshRelatedBlocks don't clobber.
-  const timelineInputs = collectVaultPages(vaultPath);
-  const timelineResult = projectTimelines(vaultPath, timelineInputs);
+  // Project chronological timelines onto entity/person/company/project/
+  // deal pages. Reuses parsedByPath so each page reads from memory
+  // instead of bouncing off disk a second time.
+  const timelineResult = projectTimelines(vaultPath, records, {
+    parsedByPath,
+  });
 
-  // The related-block rewrite only touches the body — frontmatter in
-  // parsedByPath is still authoritative. Reuse it directly instead of
-  // re-reading every page from disk.
+  // Reuse parsedByPath for digest building too.
   const digestInputs = summaries
     .map((summary) => {
       const parsed = parsedByPath.get(summary.filePath);
@@ -288,20 +329,19 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
 
   const digest = buildAgentDigest(digestInputs);
 
-  // Phase 1: run lint inline and fold its summary into the digest so Janus
-  // sees unlinked-mention and missing-attribution counts on every spawn
-  // without needing to re-run lint manually. The full lint report still
-  // lives at reports/lint.md.
+  // Run lint inline and fold its summary into the digest so Janus sees
+  // unlinked-mention and missing-attribution counts on every spawn
+  // without re-running lint manually. The full report still lives at
+  // reports/lint.md.
   const lintResult = await lintWiki(vaultPath);
   const missingAttributions =
     (lintResult.byCode['claim-missing-attribution'] || 0) +
     (lintResult.byCode['timeline-missing-attribution'] || 0);
   const unlinkedMentions = lintResult.byCode['unlinked-entity-mention'] || 0;
 
-  // Inject lint summary into the digest so the agent sees it alongside
-  // page counts and claim health. Using a loose cast since the OpenClaw
-  // AgentDigest type doesn't declare these additive fields — downstream
-  // readers that don't know about them just ignore the extras.
+  // OpenClaw AgentDigest doesn't declare these additive fields — the
+  // loose cast lets us inject them while downstream readers that don't
+  // know about them just ignore the extras.
   const digestWithLint = digest as unknown as Record<string, unknown>;
   digestWithLint.lintSummary = {
     issueCount: lintResult.issueCount,
@@ -313,23 +353,21 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
   writeAgentDigest(vaultPath, digest);
   writeClaimsJsonl(vaultPath, buildClaimsJsonlLines(digestInputs));
 
-  // Phase 5: build the in-memory link graph and cache it under
-  // .openclaw-wiki/graph-index.json so CLI traversal commands don't
-  // pay the rebuild cost on every invocation.
-  const graph = buildGraph(timelineInputs);
-  writeGraphIndex(vaultPath, graph);
+  // Build the in-memory link graph from the SAME records the timeline
+  // pass walked. Cache to disk only when the JSON actually changed so
+  // we don't churn the bridge on every container spawn.
+  const graph = buildGraph(records);
+  writeGraphIndexIfChanged(vaultPath, graph);
   const graphNodes = Object.keys(graph.nodes).length;
   let graphEdges = 0;
   for (const arr of Object.values(graph.outEdges)) graphEdges += arr.length;
 
-  // Phase 5: volume metrics + recommendation. Pure measurement —
-  // never installs anything, just tells the user when the vault has
-  // grown big enough to warrant SQLite + FTS5.
+  // Volume metrics — pure measurement. Bytes come from the in-memory
+  // bodies we already read; no statSync per page. Append + report
+  // writes are diff-gated so identical compiles don't churn the bridge.
   const compileTimeMs = Date.now() - startedAt;
-  const bytesMarkdown = digestInputs.reduce(
-    (n, p) => n + (fs.statSync(p.filePath).size || 0),
-    0,
-  );
+  let bytesMarkdown = 0;
+  for (const n of bytesByPath.values()) bytesMarkdown += n;
   const metrics: VolumeMetrics = {
     ts: new Date().toISOString(),
     pageCount: summaries.length,
@@ -339,9 +377,9 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
     lintTimeMs: lintResult.durationMs,
     pagesAdded30d: 0, // populated from log events when we wire it
   };
-  appendMetricsSnapshot(vaultPath, metrics);
+  appendMetricsSnapshotIfChanged(vaultPath, metrics);
   const volumeRecommendation = classifyAll(metrics);
-  writeVolumeReport(vaultPath, metrics, volumeRecommendation);
+  writeVolumeReportIfChanged(vaultPath, metrics, volumeRecommendation);
 
   const result: CompileResult = {
     pageCount: summaries.length,

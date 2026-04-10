@@ -11,6 +11,7 @@
 
 import path from 'path';
 
+import { localDateString } from './daily-budget-util.js';
 import { atomicWriteFile, readJsonOrDefault } from './fs-util.js';
 import { vaultPaths } from './paths.js';
 import { EnrichmentTier, TIER_USD_ESTIMATE } from './tier.js';
@@ -18,9 +19,9 @@ import { EnrichmentTier, TIER_USD_ESTIMATE } from './tier.js';
 export interface DreamBudgetState {
   date: string;
   /** Spend per tier in USD. Tiers without activity stay at 0. */
-  spent: Record<string, number>;
+  spent: Partial<Record<EnrichmentTier, number>>;
   /** Calls per tier. */
-  calls: Record<string, number>;
+  calls: Partial<Record<EnrichmentTier, number>>;
   /** Set when any tier cap is exceeded; cleared on next midnight reset. */
   blocked?: string;
 }
@@ -44,16 +45,6 @@ export const DEFAULT_DREAM_BUDGET_CONFIG: DreamBudgetConfig = {
 
 function budgetPath(vaultPath: string): string {
   return path.join(vaultPaths(vaultPath).stateDir, 'dream-budget.json');
-}
-
-function localDateString(now: Date, tz: string): string {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return fmt.format(now);
 }
 
 // Hoisted sentinel so readBudget doesn't allocate a fresh fallback per call.
@@ -98,7 +89,7 @@ export function checkDreamBudget(
 ): DreamBudgetCheck {
   const state = readDreamBudget(vaultPath, now, config.tz);
   const cap = config.capsUsd[tier];
-  const spent = state.spent[String(tier)] ?? 0;
+  const spent = state.spent[tier] ?? 0;
   const remaining = Math.max(0, cap - spent);
   const estimate = TIER_USD_ESTIMATE[tier];
   if (spent + estimate > cap) {
@@ -130,11 +121,10 @@ export function recordDreamSpend(
     baseState.date === today
       ? baseState
       : { date: today, spent: {}, calls: {} };
-  const key = String(tier);
   const next: DreamBudgetState = {
     date: today,
-    spent: { ...base.spent, [key]: (base.spent[key] ?? 0) + usd },
-    calls: { ...base.calls, [key]: (base.calls[key] ?? 0) + 1 },
+    spent: { ...base.spent, [tier]: (base.spent[tier] ?? 0) + usd },
+    calls: { ...base.calls, [tier]: (base.calls[tier] ?? 0) + 1 },
   };
   atomicWriteFile(budgetPath(vaultPath), JSON.stringify(next, null, 2) + '\n');
   return next;
@@ -147,8 +137,4 @@ export function markDreamBlocked(
 ): void {
   const next: DreamBudgetState = { ...baseState, blocked: reason };
   atomicWriteFile(budgetPath(vaultPath), JSON.stringify(next, null, 2) + '\n');
-}
-
-export function getDreamBudgetPath(vaultPath: string): string {
-  return budgetPath(vaultPath);
 }

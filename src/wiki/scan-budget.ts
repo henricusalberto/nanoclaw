@@ -15,6 +15,7 @@
 
 import path from 'path';
 
+import { localDateString } from './daily-budget-util.js';
 import { atomicWriteFile, readJsonOrDefault } from './fs-util.js';
 import { vaultPaths } from './paths.js';
 
@@ -33,16 +34,6 @@ export const HAIKU_OUTPUT_PER_MTOK = 5.0;
 
 function budgetPath(vaultPath: string): string {
   return path.join(vaultPaths(vaultPath).stateDir, 'scan-budget.json');
-}
-
-function localDateString(now: Date, tz: string): string {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return fmt.format(now); // "YYYY-MM-DD"
 }
 
 // Hoisted sentinel so `readBudget` doesn't allocate a fresh fallback

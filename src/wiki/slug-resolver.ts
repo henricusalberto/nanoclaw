@@ -66,12 +66,20 @@ export function resolveSlug(
 // Internals
 // =============================================================================
 
+// Hoisted normalize patterns — `resolveSlug` calls `normalize` once per
+// query plus once per (basename + title + alias) per page. Compiling
+// them inline meant ~1000 RegExp allocations per query on a 100-page
+// vault; module-scope reuses one set forever.
+const NORMALIZE_DASH = /[_-]+/g;
+const NORMALIZE_PUNCT = /[^a-z0-9\s]/g;
+const NORMALIZE_WHITESPACE = /\s+/g;
+
 function normalize(s: string): string {
   return s
     .toLowerCase()
-    .replace(/[_-]+/g, ' ')
-    .replace(/[^a-z0-9\s]/g, '')
-    .replace(/\s+/g, ' ')
+    .replace(NORMALIZE_DASH, ' ')
+    .replace(NORMALIZE_PUNCT, '')
+    .replace(NORMALIZE_WHITESPACE, ' ')
     .trim();
 }
 
