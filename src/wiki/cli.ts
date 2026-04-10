@@ -13,6 +13,7 @@ import path from 'path';
 import { runAutofix } from './autofix.js';
 import { syncWikiBridge } from './bridge.js';
 import { compileWiki } from './compile.js';
+import { runEntityScan } from './entity-scan.js';
 import { lintWiki } from './lint.js';
 
 const DEFAULT_VAULT = 'groups/telegram_wiki-inbox/wiki';
@@ -49,11 +50,31 @@ async function main(): Promise<void> {
   const vaultArg = positional[0];
   const vaultPath = path.resolve(vaultArg || DEFAULT_VAULT);
   const apply = flags.includes('--apply');
+  const skipQuietHours = flags.includes('--morning');
 
   switch (cmd) {
     case 'bridge':
       await cmdBridge(vaultPath);
       return;
+    case 'entity-scan': {
+      console.log(
+        `Entity scan (${skipQuietHours ? 'morning flush' : 'windowed'}): ${vaultPath}`,
+      );
+      const result = await runEntityScan(vaultPath, { skipQuietHours });
+      console.log('\nEntity scan complete:');
+      console.log(`  Windows processed:     ${result.windowsProcessed}`);
+      console.log(
+        `  Rejected (pre-filter): ${result.windowsRejectedByPrefilter}`,
+      );
+      console.log(`  Quiet-hours deferred:  ${result.windowsSkippedQuietHours}`);
+      console.log(`  Budget deferred:       ${result.windowsSkippedBudget}`);
+      console.log(`  Entities extracted:    ${result.entitiesExtracted}`);
+      console.log(`  Originals extracted:   ${result.originalsExtracted}`);
+      console.log(`  LLM calls:             ${result.llmCalls}`);
+      console.log(`  Estimated USD spent:   $${result.usdSpent.toFixed(4)}`);
+      console.log(`  Duration:              ${result.durationMs}ms`);
+      return;
+    }
     case 'autofix': {
       console.log(
         `Autofixing wiki (${apply ? 'APPLY' : 'DRY RUN'}): ${vaultPath}`,
@@ -148,6 +169,12 @@ async function main(): Promise<void> {
       console.log('  lint              Run structural health checks');
       console.log(
         '  autofix [--apply] Auto-repair lint issues (dry-run by default)',
+      );
+      console.log(
+        '  entity-scan [--morning]',
+      );
+      console.log(
+        '                    Process conversation-window entity queue',
       );
       console.log('');
       console.log('Default vault: ' + DEFAULT_VAULT);

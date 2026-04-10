@@ -16,7 +16,9 @@ export type WikiLogEventType =
   | 'lint'
   | 'bridge-sync'
   | 'apply'
-  | 'migration';
+  | 'migration'
+  | 'entity-scan'
+  | 'entity-enqueue';
 
 export interface WikiLogEvent {
   ts: string;

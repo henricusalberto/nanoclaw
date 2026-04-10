@@ -44,6 +44,7 @@ const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
   { dir: 'concepts', kind: 'concept' },
   { dir: 'syntheses', kind: 'synthesis' },
   { dir: 'sources', kind: 'source' },
+  { dir: 'originals', kind: 'original' },
   // reports/ deliberately excluded — those are lint's own output, linting
   // them would be circular noise
 ];
@@ -651,7 +652,12 @@ function checkUnlinkedMentions(
   blocklist: Set<string>,
 ): LintIssue[] {
   const issues: LintIssue[] = [];
-  if (page.kind === 'source' || page.kind === 'report') return issues;
+  if (
+    page.kind === 'source' ||
+    page.kind === 'report' ||
+    page.kind === 'original'
+  )
+    return issues;
 
   // "One wikilink per target per page is enough." If the page already
   // links to the target at least once, subsequent plain-text mentions

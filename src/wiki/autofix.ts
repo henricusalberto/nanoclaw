@@ -37,6 +37,8 @@ const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
   { dir: 'concepts', kind: 'concept' },
   { dir: 'syntheses', kind: 'synthesis' },
   { dir: 'sources', kind: 'source' },
+  // originals/ intentionally omitted: originals are immutable verbatim
+  // capture and must never be touched by autofix.
 ];
 
 const DEFAULT_BLOCKLIST: string[] = [

@@ -42,6 +42,7 @@ const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
   { dir: 'syntheses', kind: 'synthesis' },
   { dir: 'sources', kind: 'source' },
   { dir: 'reports', kind: 'report' },
+  { dir: 'originals', kind: 'original' },
 ];
 
 const MANAGED_BLOCK_NAME = 'related';

@@ -28,6 +28,23 @@ export interface BridgeSourceConfig {
   maxFileSizeBytes?: number; // skip if larger
 }
 
+export interface EntityScanConfig {
+  /** Master on/off switch. Defaults to false — opt-in per-vault. */
+  enabled: boolean;
+  /** Hard daily spend cap in USD. Above this, LLM calls are suppressed. */
+  dailyBudgetUsd: number;
+  /** Idle window after last message before a conversation closes, seconds. */
+  windowIdleSeconds: number;
+  /** Max messages before a window is force-flushed regardless of idle. */
+  windowMaxMessages: number;
+  /** IANA tz for quiet-hours computation. */
+  quietHoursTz: string;
+  /** Quiet window start hour, local time, inclusive. */
+  quietHoursStart: number;
+  /** Quiet window end hour, local time, exclusive. */
+  quietHoursEnd: number;
+}
+
 export interface BridgeConfig {
   vaultMode: 'bridge';
   ingest: {
@@ -37,7 +54,19 @@ export interface BridgeConfig {
   sources: BridgeSourceConfig[];
   /** Concept-tag stopwords merged with the built-in defaults. */
   conceptTagStopwords?: string[];
+  /** Phase 2: conversation-window entity detection. Off by default. */
+  entityScan?: EntityScanConfig;
 }
+
+export const DEFAULT_ENTITY_SCAN_CONFIG: EntityScanConfig = {
+  enabled: false,
+  dailyBudgetUsd: 1.5,
+  windowIdleSeconds: 60,
+  windowMaxMessages: 10,
+  quietHoursTz: 'Europe/Berlin',
+  quietHoursStart: 23,
+  quietHoursEnd: 7,
+};
 
 export function getBridgeConfigPath(vaultPath: string): string {
   return vaultPaths(vaultPath).bridgeConfig;
@@ -189,6 +218,7 @@ function coerceBridgeConfig(parsed: unknown): BridgeConfig {
   const conceptTagStopwords = Array.isArray(obj.conceptTagStopwords)
     ? (obj.conceptTagStopwords as string[])
     : undefined;
+  const entityScan = coerceEntityScanConfig(obj.entityScan);
   return {
     vaultMode: 'bridge',
     ingest: {
@@ -197,5 +227,41 @@ function coerceBridgeConfig(parsed: unknown): BridgeConfig {
     },
     sources,
     ...(conceptTagStopwords && { conceptTagStopwords }),
+    ...(entityScan && { entityScan }),
+  };
+}
+
+function coerceEntityScanConfig(parsed: unknown): EntityScanConfig | undefined {
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const obj = parsed as Record<string, unknown>;
+  return {
+    enabled:
+      typeof obj.enabled === 'boolean'
+        ? obj.enabled
+        : DEFAULT_ENTITY_SCAN_CONFIG.enabled,
+    dailyBudgetUsd:
+      typeof obj.dailyBudgetUsd === 'number'
+        ? obj.dailyBudgetUsd
+        : DEFAULT_ENTITY_SCAN_CONFIG.dailyBudgetUsd,
+    windowIdleSeconds:
+      typeof obj.windowIdleSeconds === 'number'
+        ? obj.windowIdleSeconds
+        : DEFAULT_ENTITY_SCAN_CONFIG.windowIdleSeconds,
+    windowMaxMessages:
+      typeof obj.windowMaxMessages === 'number'
+        ? obj.windowMaxMessages
+        : DEFAULT_ENTITY_SCAN_CONFIG.windowMaxMessages,
+    quietHoursTz:
+      typeof obj.quietHoursTz === 'string'
+        ? obj.quietHoursTz
+        : DEFAULT_ENTITY_SCAN_CONFIG.quietHoursTz,
+    quietHoursStart:
+      typeof obj.quietHoursStart === 'number'
+        ? obj.quietHoursStart
+        : DEFAULT_ENTITY_SCAN_CONFIG.quietHoursStart,
+    quietHoursEnd:
+      typeof obj.quietHoursEnd === 'number'
+        ? obj.quietHoursEnd
+        : DEFAULT_ENTITY_SCAN_CONFIG.quietHoursEnd,
   };
 }

@@ -18,7 +18,13 @@ export type WikiPageKind =
   | 'concept'
   | 'source'
   | 'synthesis'
-  | 'report';
+  | 'report'
+  /**
+   * Phase 2: verbatim thought capture. Originals are immutable — the
+   * Dream Cycle never rewrites them. They live under `wiki/originals/`
+   * and preserve the user's own phrasing.
+   */
+  | 'original';
 
 export interface WikiClaimEvidence {
   sourceId?: string;

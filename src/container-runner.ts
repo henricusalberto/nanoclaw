@@ -23,6 +23,8 @@ import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { syncWikiBridge } from './wiki/bridge.js';
+import { readBridgeConfig } from './wiki/bridge-config.js';
+import { buildRow, enqueueMessage } from './wiki/entity-queue.js';
 import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
@@ -506,6 +508,50 @@ async function buildContainerArgs(
 }
 
 /**
+ * Shared wiki-inbox vault path. Phase 2 entity-scan writes all groups'
+ * queue rows to the single wiki-inbox vault so the scanner only has one
+ * place to look.
+ */
+function wikiInboxVaultPath(): string | null {
+  const p = path.join(process.cwd(), 'groups', 'telegram_wiki-inbox', 'wiki');
+  const state = path.join(p, '.openclaw-wiki');
+  return fs.existsSync(state) ? p : null;
+}
+
+/**
+ * Append this spawn's inbound message to the entity-scan queue. Best
+ * effort — any failure is logged and swallowed. Gated by the vault's
+ * entityScan.enabled config so users who haven't opted in pay nothing.
+ *
+ * Scheduled-task spawns are skipped: the queue is for human conversation
+ * windows, not autonomous cron wake-ups.
+ */
+function maybeEnqueueForEntityScan(
+  group: RegisteredGroup,
+  input: ContainerInput,
+): void {
+  if (input.isScheduledTask) return;
+  const vaultPath = wikiInboxVaultPath();
+  if (!vaultPath) return;
+  try {
+    const cfg = readBridgeConfig(vaultPath);
+    if (!cfg.entityScan?.enabled) return;
+    const row = buildRow({
+      groupFolder: group.folder,
+      chatJid: input.chatJid,
+      sender: input.assistantName ?? 'user',
+      snippet: input.prompt,
+    });
+    enqueueMessage(vaultPath, row);
+  } catch (err) {
+    logger.warn(
+      { group: group.folder, err: String(err) },
+      'entity-scan enqueue failed (non-fatal)',
+    );
+  }
+}
+
+/**
  * Run the wiki bridge sync if this group's directory contains a wiki vault
  * with a `.openclaw-wiki/` state directory. Errors are logged but never
  * propagated — bridge failures must not block container spawns.
@@ -567,6 +613,10 @@ export async function runContainerAgent(
   // when nothing has changed (just stats + JSON read), so safe to call
   // unconditionally on every spawn. See src/wiki/bridge.ts.
   await maybeRunWikiBridgeSync(group);
+
+  // Phase 2: append this message to the entity-scan queue. The scanner
+  // runs on its own cron; this hook only does an O(line) append.
+  maybeEnqueueForEntityScan(group, input);
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');

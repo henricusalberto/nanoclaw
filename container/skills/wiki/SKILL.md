@@ -12,7 +12,9 @@ This wiki only lives in the **Wiki Inbox** group (`telegram_wiki-inbox`). When i
 
 ## CRITICAL: First action on every wake-up
 
-**Before answering the user, check `.openclaw-wiki/pending-ingest.json`.**
+**Before answering the user, do two checks in this order:**
+
+### 1. Bridge sync → `.openclaw-wiki/pending-ingest.json`
 
 If the file exists, the bridge sync (which runs automatically before every container spawn) has detected new or updated source files in `sources/bridge-*.md`. The marker file lists them. Your job is to ingest them into the wiki BEFORE handling the user's actual message.
 
@@ -32,9 +34,41 @@ After processing all changed sources, **delete the marker file** so it isn't rep
 rm .openclaw-wiki/pending-ingest.json
 ```
 
+If you can't process all sources in one wake-up (e.g., there are too many), process as many as you can, leave the marker file in place, and Janus will continue on the next wake.
+
+### 2. Entity watchdog → `.openclaw-wiki/entity-candidates.jsonl`
+
+This file is produced by the hourly `wiki-entity-scan` cron, which runs Haiku over recent conversation windows from any Telegram topic to extract candidate entities and original-thinking quotes. **The scanner never writes real pages** — its job is purely to propose; yours is to curate.
+
+```bash
+cat .openclaw-wiki/entity-candidates.jsonl
+```
+
+Each row is a JSON object:
+
+```json
+{"kind":"entity-candidate","name":"Klaviyo","entityType":"tool","quote":"...","window":{"windowId":"...","groupFolder":"telegram_family","openedAt":"...","closedAt":"..."},"extractedAt":"..."}
+{"kind":"original-thinking","quote":"I think the whole retention funnel is upside down","window":{...},"extractedAt":"..."}
+```
+
+For each candidate:
+- **`entity-candidate`**: if the name is genuinely consequential (worth a wiki page), either update an existing `entities/<slug>.md` page (append a claim citing the quote with `[Source: user, <groupFolder>, <YYYY-MM-DD>]`) or create a new one if none exists. If it's generic or noise, discard.
+- **`original-thinking`**: if the quote is distinctive enough to preserve verbatim, write a new immutable page under `originals/YYYY-MM-DD--first-6-words-slug.md` with frontmatter `pageType: original`, `verbatim: true`, and the exact quote as the body. **Never rewrite or summarize an original — they are immutable.** If it's not distinctive, discard.
+
+After processing, rewrite `entity-candidates.jsonl` containing only rows you couldn't decide on (or delete the file entirely if you processed everything):
+
+```bash
+# If you processed every row:
+rm .openclaw-wiki/entity-candidates.jsonl
+
+# Otherwise, rewrite with only the rows you're deferring.
+```
+
 Then handle whatever the user actually messaged about.
 
-If you can't process all sources in one wake-up (e.g., there are too many), process as many as you can, leave the marker file in place, and Janus will continue on the next wake.
+#### Budget awareness
+
+The scanner has a daily USD cap tracked at `.openclaw-wiki/scan-budget.json`. If `blocked` is set on that file, the cap was hit today — tell Maurizio if he asks why candidates look thin. The cap resets at local midnight automatically.
 
 ## OpenClaw-compatible vault layout
 
