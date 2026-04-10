@@ -39,46 +39,64 @@ const BOOKMARK_SYNC_CRON = '0 6 * * *';
 // Phase 4: dream cycle — nightly enrichment + timeline refresh at 03:00 CET.
 const DREAM_CYCLE_CRON = '0 3 * * *';
 
-// In-container bash script: runs the wiki CLI, prints JSON result. The
-// {wakeAgent: false} marker keeps the scheduler from spawning Janus for
-// this task — entity-scan produces candidates; Janus picks them up on
+// In-container bash scripts for wiki crons. We use the PRE-COMPILED
+// `dist/wiki/cli.js` (produced by `npm run build` on the host) and
+// `node`, NOT `npx tsx`. Reason: the host project's node_modules has
+// a darwin esbuild binary but the container runs linux — tsx can't
+// boot. Running plain node against the compiled JS sidesteps the
+// whole esbuild dependency.
+//
+// NODE_PATH=/app/node_modules lets the wiki CLI's runtime deps
+// (js-yaml, @anthropic-ai/claude-agent-sdk, pino, etc.) resolve
+// against the agent-runner's pre-installed deps instead of the
+// host's shadowed ones.
+//
+// The vault path is explicitly passed as /workspace/wiki-inbox/wiki —
+// the wiki-inbox group dir is bind-mounted writable at that path for
+// main containers (see container-runner.ts::buildVolumeMounts).
+//
+// The {wakeAgent: false} marker keeps the scheduler from spawning
+// Janus for this task — crons produce state; Janus picks it up on
 // the next real container spawn.
+// `cd /workspace/project` FIRST — the wiki CLI uses process.cwd() as
+// the bridge repoRoot, and without this the glob patterns walk the
+// wrong directory and silently prune every memory source page.
+const WIKI_CLI_RUN =
+  'cd /workspace/project && NODE_PATH=/app/node_modules node dist/wiki/cli.js';
+const WIKI_VAULT = '/workspace/wiki-inbox/wiki';
+
 const ENTITY_SCAN_HOURLY_SCRIPT = `#!/bin/bash
 set -e
-cd /workspace/project
-npx tsx src/wiki/cli.ts entity-scan > /tmp/entity-scan.log 2>&1 || true
+${WIKI_CLI_RUN} entity-scan ${WIKI_VAULT} > /tmp/entity-scan.log 2>&1 || true
 tail -30 /tmp/entity-scan.log
 echo '{"wakeAgent": false}'`;
 
 const ENTITY_SCAN_MORNING_SCRIPT = `#!/bin/bash
 set -e
-cd /workspace/project
-npx tsx src/wiki/cli.ts entity-scan --morning > /tmp/entity-scan-morning.log 2>&1 || true
+${WIKI_CLI_RUN} entity-scan --morning ${WIKI_VAULT} > /tmp/entity-scan-morning.log 2>&1 || true
 tail -30 /tmp/entity-scan-morning.log
 echo '{"wakeAgent": false}'`;
 
 const ENTITY_SCAN_PROMPT =
   'Process conversation-window entity queue (handled by script — agent should not be woken).';
 
-// Phase 2.5: bookmark sync cron — runs the bridge, which walks pull sources.
+// Bookmark sync cron — runs the bridge which walks pull sources.
 // The bridge handles fieldtheory internally; no agent wake required.
 const BOOKMARK_SYNC_SCRIPT = `#!/bin/bash
 set -e
-cd /workspace/project
-npx tsx src/wiki/cli.ts bridge > /tmp/wiki-bookmark-sync.log 2>&1 || true
+${WIKI_CLI_RUN} bridge ${WIKI_VAULT} > /tmp/wiki-bookmark-sync.log 2>&1 || true
 tail -30 /tmp/wiki-bookmark-sync.log
 echo '{"wakeAgent": false}'`;
 
 const BOOKMARK_SYNC_PROMPT =
   'Sync X bookmarks via fieldtheory into wiki sources/ (handled by script — agent should not be woken).';
 
-// Phase 4 dream-cycle cron. Runs enrichment + timeline projection +
-// compile autonomously. Writes shadow proposals to .openclaw-wiki/
-// enrichment/ — Janus curates on his next real wake-up.
+// Dream cycle cron. Runs enrichment + timeline projection + compile
+// autonomously. Writes shadow proposals to .openclaw-wiki/enrichment/ —
+// Janus curates on his next real wake-up.
 const DREAM_CYCLE_SCRIPT = `#!/bin/bash
 set -e
-cd /workspace/project
-npx tsx src/wiki/cli.ts dream > /tmp/wiki-dream.log 2>&1 || true
+${WIKI_CLI_RUN} dream ${WIKI_VAULT} > /tmp/wiki-dream.log 2>&1 || true
 tail -50 /tmp/wiki-dream.log
 echo '{"wakeAgent": false}'`;
 

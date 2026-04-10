@@ -1,85 +1,120 @@
 /**
- * Shared wrapper for spawning the in-container `claude` CLI in
- * one-shot (`-p --bare`) mode. Every host-side LLM call from the wiki
- * pipeline — entity-scan, image OCR, future dream-cycle enrichers —
- * goes through here so the argv surface, timeout handling, and error
- * shape live in ONE place.
+ * Shared wrapper for one-shot Claude calls from the wiki pipeline
+ * (entity-scan, image OCR, dream-cycle Tier 1, etc.).
  *
- * Auth flows through the OneCLI proxy already baked into the container
- * image; callers don't need to inject API keys.
+ * Goes through the @anthropic-ai/claude-agent-sdk's `query()` API
+ * rather than spawning the standalone `claude` CLI. The standalone
+ * CLI's startup auth check rejects the OneCLI placeholder token,
+ * which would silently break every wiki cron when invoked from
+ * inside a NanoClaw container. The SDK uses the same OneCLI proxy
+ * env vars (HTTPS_PROXY + CA cert) that the agent runtime relies on
+ * and authenticates correctly.
+ *
+ * Image attachments are not currently supported via this path —
+ * the image extractor needs a separate code path or it can fall
+ * back to a reference-only stub when no caller is wired.
  */
 
-import { spawnCapture } from './spawn-util.js';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
 export interface ClaudeCliCallOptions {
-  /** The user prompt. Sent as a positional argv, same as an interactive call. */
+  /** The user prompt. */
   prompt: string;
-  /** Haiku / Sonnet / Opus. Defaults to Haiku 4.5 (cheap cron workloads). */
+  /** Haiku / Sonnet / Opus. Defaults to Haiku 4.5 for cheap cron workloads. */
   model?: string;
   /** Hard wall-clock limit. Defaults to 60s. */
   timeoutMs?: number;
   /**
-   * JSON schema to constrain the response shape. The CLI enforces this
-   * via `--json-schema <stringified>` and guarantees parsed output
-   * matches on success.
+   * Optional JSON schema descriptor — kept on the interface for API
+   * compat with callers that used the legacy CLI's --json-schema. The
+   * SDK doesn't enforce this server-side, so we treat it as a hint
+   * and rely on the prompt to constrain the response shape.
    */
   jsonSchema?: object;
   /**
-   * Image path to attach (vision). Passed as `--image <path>`. Only
-   * supply for image-capable models.
+   * Image path to attach. Not supported via the SDK query() API in
+   * this version — callers should fall back to text-only or write a
+   * direct REST call.
    */
   imagePath?: string;
 }
 
 export interface ClaudeCliCallResult {
-  /** Raw stdout as returned by the CLI. */
+  /** Raw text returned by the model. */
   stdout: string;
-  /** Convenience: JSON.parse(stdout) when a schema was supplied. null on failure. */
+  /** Convenience: JSON.parse(stdout) when parseable, null otherwise. */
   json: unknown;
 }
 
 /**
- * One-shot call. Throws on non-zero exit, timeout, or spawn failure —
- * callers wrap in try/catch and decide whether to fall back to an
- * empty result or surface the error.
+ * One-shot call. Throws on timeout or SDK error — callers wrap in
+ * try/catch and decide whether to fall back to an empty result or
+ * surface the error to the user.
  */
 export async function callClaudeCli(
   opts: ClaudeCliCallOptions,
 ): Promise<ClaudeCliCallResult> {
-  const args: string[] = [
-    '-p',
-    '--bare',
-    '--model',
-    opts.model ?? 'claude-haiku-4-5',
-    '--output-format',
-    'text',
-    '--dangerously-skip-permissions',
-  ];
-  if (opts.jsonSchema) {
-    args.push('--json-schema', JSON.stringify(opts.jsonSchema));
-  }
   if (opts.imagePath) {
-    args.push('--image', opts.imagePath);
+    // Vision via SDK query() isn't wired here; image extractor handles
+    // this case by collapsing to a reference-only stub.
+    throw new Error('claude-cli: image attachments not supported via SDK path');
   }
-  // Prompt last — claude's positional arg.
-  args.push(opts.prompt);
 
-  const { stdout } = await spawnCapture('claude', args, {
-    timeoutMs: opts.timeoutMs ?? 60_000,
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const model = opts.model ?? 'claude-haiku-4-5';
+
+  const stream = query({
+    prompt: opts.prompt,
+    options: {
+      permissionMode: 'bypassPermissions',
+      model,
+      // Empty allowedTools — pure text completion, no agentic tool use.
+      allowedTools: [],
+    },
   });
 
+  // Race the stream against a hard wall-clock timeout so a hung gateway
+  // can't lock up entity-scan or the dream cycle.
+  const result = await withTimeout(consumeStream(stream), timeoutMs);
+
   let json: unknown = null;
-  const trimmed = stdout.trim();
+  const trimmed = result.trim();
   if (trimmed) {
     try {
-      // Forgive fenced JSON even though --json-schema should prevent it.
+      // Forgive fenced JSON even when the prompt asked for raw.
       const cleaned = trimmed
         .replace(/^```(?:json)?\n/, '')
         .replace(/\n```$/, '');
       json = JSON.parse(cleaned);
     } catch {
-      // Leave json null — caller inspects stdout directly if they care.
+      // Leave json null — caller inspects stdout directly if it cares.
     }
   }
-  return { stdout, json };
+  return { stdout: result, json };
+}
+
+async function consumeStream(stream: AsyncIterable<unknown>): Promise<string> {
+  let result = '';
+  for await (const msg of stream) {
+    const m = msg as { type?: string; result?: unknown };
+    if (m.type === 'result' && typeof m.result === 'string') {
+      result = m.result;
+    }
+  }
+  return result;
+}
+
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`claude SDK call timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

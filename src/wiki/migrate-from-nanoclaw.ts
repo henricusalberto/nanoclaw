@@ -81,6 +81,9 @@ function categoryToKind(category: string | undefined): WikiPageKind {
 }
 
 function kindToDir(kind: WikiPageKind): string {
+  // Legacy 5-kind map — this migration script only produces these
+  // kinds. Phase 3 MECE kinds (person, company, etc.) are handled by
+  // migrate-vault.ts which takes over after this script runs.
   switch (kind) {
     case 'entity':
       return 'entities';
@@ -92,6 +95,8 @@ function kindToDir(kind: WikiPageKind): string {
       return 'syntheses';
     case 'report':
       return 'reports';
+    default:
+      return 'entities';
   }
 }
 

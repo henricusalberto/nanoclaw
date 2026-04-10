@@ -25,6 +25,7 @@
     "wiki:doctor": "npm run wiki:bridge && npm run wiki:compile && npm run wiki:lint"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.98",
     "@onecli-sh/sdk": "^0.2.0",
     "@types/js-yaml": "^4.0.9",
     "better-sqlite3": "11.10.0",

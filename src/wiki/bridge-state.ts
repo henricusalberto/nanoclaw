@@ -48,8 +48,20 @@ export function getSourceSyncStatePath(vaultPath: string): string {
   return vaultPaths(vaultPath).sourceSync;
 }
 
-export function resolveArtifactKey(absoluteSourcePath: string): string {
-  return crypto.createHash('sha1').update(absoluteSourcePath).digest('hex');
+/**
+ * Stable sync-state key for a source file. MUST use the REPO-RELATIVE
+ * path, not the absolute path, so the same file produces the same key
+ * whether the bridge runs on the host (/Users/.../nanoclaw/groups/...)
+ * or inside a container (/workspace/project/groups/...). Earlier
+ * implementations hashed the absolute path and caused every
+ * cross-environment run to look like an import + prune cycle that
+ * destroyed prior state.
+ *
+ * Pull sources use the synthetic `pull://<source-id>/<bookmark-id>`
+ * path which is already portable, so pass that through unchanged.
+ */
+export function resolveArtifactKey(sourcePathOrRelative: string): string {
+  return crypto.createHash('sha1').update(sourcePathOrRelative).digest('hex');
 }
 
 export function readSourceSyncState(vaultPath: string): SourceSyncState {
@@ -97,6 +109,11 @@ export function shouldSkipImportedSourceWrite(params: {
   state: SourceSyncState;
   syncKey: string;
   expectedPagePath: string;
+  /**
+   * REPO-RELATIVE source path used for comparison. Absolute paths
+   * would break the host/container consistency story (see the
+   * resolveArtifactKey doc comment).
+   */
   sourcePath: string;
   sourceUpdatedAtMs: number;
   sourceSize: number;

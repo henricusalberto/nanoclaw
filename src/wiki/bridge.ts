@@ -264,7 +264,7 @@ function buildBridgeFrontmatter(params: {
     status: 'active',
     updatedAt: params.ingestedAt,
     sourceType: kindToSourceType(params.file.sourceConfig.kind),
-    sourcePath: params.file.absolutePath,
+    sourcePath: params.file.relativePath,
     bridgeRelativePath: params.file.relativePath,
     bridgeWorkspaceDir: params.repoRoot,
     bridgeAgentIds: params.file.sourceConfig.agentIds || [],
@@ -440,7 +440,7 @@ function buildExtractedFrontmatter(params: {
     status: 'active',
     updatedAt: params.ingestedAt,
     sourceType: 'extracted-asset',
-    sourcePath: params.file.absolutePath,
+    sourcePath: params.file.relativePath,
     bridgeRelativePath: params.file.relativePath,
     bridgeWorkspaceDir: params.repoRoot,
     bridgeAgentIds: params.file.sourceConfig.agentIds || [],
@@ -548,7 +548,7 @@ async function writeExtractedSourcePage(params: {
       state,
       syncKey,
       expectedPagePath: pageRelativePath,
-      sourcePath: file.absolutePath,
+      sourcePath: file.relativePath,
       sourceUpdatedAtMs: file.mtimeMs,
       sourceSize: file.size,
       renderFingerprint,
@@ -609,7 +609,7 @@ async function writeExtractedSourcePage(params: {
   state.entries[syncKey] = {
     group: 'bridge',
     pagePath: pageRelativePath,
-    sourcePath: file.absolutePath,
+    sourcePath: file.relativePath,
     sourceUpdatedAtMs: file.mtimeMs,
     sourceSize: file.size,
     renderFingerprint,
@@ -695,10 +695,12 @@ async function processPullSource(params: {
   // bookmarks but everything previously imported is still owned by
   // this source. Mark every prior pull-state entry as still-active so
   // the prune step at the end of syncWikiBridge doesn't delete the
-  // 900+ pages we wrote on a previous run.
+  // 900+ pages we wrote on a previous run. Relative sourcePath
+  // convention for pull entries: `<source-id>/<bookmark-id>` (no
+  // `pull://` prefix).
   const sourceIdPrefix = `${sourceConfig.id}/`;
   for (const [key, entry] of Object.entries(state.entries)) {
-    if (entry.sourcePath.startsWith(`pull://${sourceIdPrefix}`)) {
+    if (entry.sourcePath.startsWith(sourceIdPrefix)) {
       activeKeys.add(key);
     }
   }
@@ -714,7 +716,7 @@ async function processPullSource(params: {
       repoRoot,
       bookmarkedAtMs,
     });
-    const syncKey = resolveArtifactKey(virtualFile.absolutePath);
+    const syncKey = resolveArtifactKey(virtualFile.relativePath);
     activeKeys.add(syncKey);
 
     const slug = buildBridgeSlug(sourceConfig, virtualFile);
@@ -799,7 +801,7 @@ export async function syncWikiBridge(
     const files = resolveSourceFiles(sourceConfig, repoRoot);
 
     for (const file of files) {
-      const syncKey = resolveArtifactKey(file.absolutePath);
+      const syncKey = resolveArtifactKey(file.relativePath);
       activeKeys.add(syncKey);
 
       const slug = buildBridgeSlug(sourceConfig, file);
@@ -836,7 +838,7 @@ export async function syncWikiBridge(
         state,
         syncKey,
         expectedPagePath: pageRelativePath,
-        sourcePath: file.absolutePath,
+        sourcePath: file.relativePath,
         sourceUpdatedAtMs: file.mtimeMs,
         sourceSize: file.size,
         renderFingerprint,
@@ -894,7 +896,7 @@ export async function syncWikiBridge(
       state.entries[syncKey] = {
         group: 'bridge',
         pagePath: pageRelativePath,
-        sourcePath: file.absolutePath,
+        sourcePath: file.relativePath,
         sourceUpdatedAtMs: file.mtimeMs,
         sourceSize: file.size,
         renderFingerprint,
