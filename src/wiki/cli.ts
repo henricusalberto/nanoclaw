@@ -14,6 +14,7 @@ import path from 'path';
 import { runAutofix } from './autofix.js';
 import { syncWikiBridge } from './bridge.js';
 import { compileWiki } from './compile.js';
+import { runDreamCycle } from './dream-cycle.js';
 import { runEntityScan } from './entity-scan.js';
 import { ExtractorInput } from './extractors/base.js';
 import { getDefaultRegistry } from './extractors/registry.js';
@@ -130,6 +131,37 @@ async function main(): Promise<void> {
       console.log(`  LLM calls:             ${result.llmCalls}`);
       console.log(`  Estimated USD spent:   $${result.usdSpent.toFixed(4)}`);
       console.log(`  Duration:              ${result.durationMs}ms`);
+      return;
+    }
+    case 'dream': {
+      console.log(`Dream cycle: ${vaultPath}`);
+      const result = await runDreamCycle(vaultPath);
+      console.log('\nDream cycle complete:');
+      console.log(`  Pages scanned:         ${result.pagesScanned}`);
+      console.log(`  Enrichment candidates: ${result.enrichment.candidates}`);
+      console.log(`  Tier 0 applied:        ${result.enrichment.tier0Applied}`);
+      console.log(
+        `  Tier 1 written:        ${result.enrichment.tier1Written} (of ${result.enrichment.tier1Attempted})`,
+      );
+      console.log(
+        `  Budget-blocked:        ${result.enrichment.budgetBlocked}`,
+      );
+      if (result.compile) {
+        console.log(
+          `  Lint issues:           ${result.compile.lintIssueCount}`,
+        );
+        console.log(
+          `  Timeline rewrites:     ${result.compile.timelinePagesRewritten}`,
+        );
+      }
+      console.log(`  Report:                ${result.reportPath}`);
+      console.log(`  Duration:              ${result.durationMs}ms`);
+      if (result.enrichment.errors.length > 0) {
+        console.log(`\nErrors (${result.enrichment.errors.length}):`);
+        for (const err of result.enrichment.errors.slice(0, 10)) {
+          console.log(`  ${err.page}: ${err.message}`);
+        }
+      }
       return;
     }
     case 'resolve': {
@@ -311,6 +343,9 @@ async function main(): Promise<void> {
       );
       console.log(`  Missing attributions: ${result.missingAttributions}`);
       console.log(`  Unlinked mentions:    ${result.unlinkedMentions}`);
+      console.log(
+        `  Timelines rewritten:  ${result.timelinePagesRewritten} (${result.timelineEntriesTotal} entries)`,
+      );
       console.log(`  Duration:             ${result.durationMs}ms`);
       return;
     }
@@ -370,6 +405,7 @@ async function main(): Promise<void> {
       console.log(
         '                    Run Phase 3 MECE migration (dry-run by default)',
       );
+      console.log('  dream             Run the nightly dream cycle');
       console.log('');
       console.log('Default vault: ' + DEFAULT_VAULT);
       return;

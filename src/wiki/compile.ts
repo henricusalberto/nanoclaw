@@ -35,7 +35,8 @@ import {
   renderRelatedBlock,
   summarizePage,
 } from './related.js';
-import { VAULT_DIRS as WALKED_DIRS } from './vault-walk.js';
+import { projectTimelines } from './timeline-projection.js';
+import { collectVaultPages, VAULT_DIRS as WALKED_DIRS } from './vault-walk.js';
 
 // Compile walks VAULT_DIRS plus reports/ (which lint excludes to avoid
 // the circular "lint its own output" problem). Report pages still need
@@ -59,6 +60,9 @@ export interface CompileResult {
   lintWarningCount: number;
   missingAttributions: number;
   unlinkedMentions: number;
+  /** Phase 4: compile-time managed-block projections. */
+  timelinePagesRewritten: number;
+  timelineEntriesTotal: number;
   durationMs: number;
 }
 
@@ -248,6 +252,13 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
   );
   const indexesRefreshed = refreshIndexes(vaultPath, summaries);
 
+  // Phase 4: project chronological timelines onto entity/person/company/
+  // project/deal pages. Walks source pages, claims, and log events and
+  // writes a managed block per page. Re-reads pages from disk inside the
+  // projector so stale bodies from refreshRelatedBlocks don't clobber.
+  const timelineInputs = collectVaultPages(vaultPath);
+  const timelineResult = projectTimelines(vaultPath, timelineInputs);
+
   // The related-block rewrite only touches the body — frontmatter in
   // parsedByPath is still authoritative. Reuse it directly instead of
   // re-reading every page from disk.
@@ -301,6 +312,8 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
     lintWarningCount: lintResult.bySeverity.warning,
     missingAttributions,
     unlinkedMentions,
+    timelinePagesRewritten: timelineResult.rewrittenCount,
+    timelineEntriesTotal: timelineResult.entriesTotal,
     durationMs: Date.now() - startedAt,
   };
 

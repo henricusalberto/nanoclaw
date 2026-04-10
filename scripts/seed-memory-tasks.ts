@@ -25,6 +25,7 @@ const ARCHIVE_TASK_ID = 'memory-archive-weekly';
 const ENTITY_SCAN_HOURLY_TASK_ID = 'wiki-entity-scan-hourly';
 const ENTITY_SCAN_MORNING_TASK_ID = 'wiki-entity-scan-morning';
 const BOOKMARK_SYNC_TASK_ID = 'wiki-bookmark-sync-daily';
+const DREAM_CYCLE_TASK_ID = 'wiki-dream-nightly';
 
 const SYNTHESIZE_CRON = '0 23 * * *';
 const ARCHIVE_CRON = '0 4 * * 0';
@@ -35,6 +36,8 @@ const ENTITY_SCAN_HOURLY_CRON = '5 * * * *';
 const ENTITY_SCAN_MORNING_CRON = '5 7 * * *';
 // Phase 2.5: pull new X bookmarks via fieldtheory every morning at 06:00 CET.
 const BOOKMARK_SYNC_CRON = '0 6 * * *';
+// Phase 4: dream cycle — nightly enrichment + timeline refresh at 03:00 CET.
+const DREAM_CYCLE_CRON = '0 3 * * *';
 
 // In-container bash script: runs the wiki CLI, prints JSON result. The
 // {wakeAgent: false} marker keeps the scheduler from spawning Janus for
@@ -68,6 +71,19 @@ echo '{"wakeAgent": false}'`;
 
 const BOOKMARK_SYNC_PROMPT =
   'Sync X bookmarks via fieldtheory into wiki sources/ (handled by script — agent should not be woken).';
+
+// Phase 4 dream-cycle cron. Runs enrichment + timeline projection +
+// compile autonomously. Writes shadow proposals to .openclaw-wiki/
+// enrichment/ — Janus curates on his next real wake-up.
+const DREAM_CYCLE_SCRIPT = `#!/bin/bash
+set -e
+cd /workspace/project
+npx tsx src/wiki/cli.ts dream > /tmp/wiki-dream.log 2>&1 || true
+tail -50 /tmp/wiki-dream.log
+echo '{"wakeAgent": false}'`;
+
+const DREAM_CYCLE_PROMPT =
+  'Run the nightly dream cycle (handled by script — agent should not be woken).';
 
 const SYNTHESIZE_PROMPT = `Synthesize today's memory files into MEMORY.md.
 
@@ -196,6 +212,15 @@ function main(): void {
     prompt: BOOKMARK_SYNC_PROMPT,
     script: BOOKMARK_SYNC_SCRIPT,
     cron: BOOKMARK_SYNC_CRON,
+  });
+
+  upsertTask({
+    id: DREAM_CYCLE_TASK_ID,
+    groupFolder: group.folder,
+    chatJid,
+    prompt: DREAM_CYCLE_PROMPT,
+    script: DREAM_CYCLE_SCRIPT,
+    cron: DREAM_CYCLE_CRON,
   });
 
   console.log('Done. Memory tasks seeded.');

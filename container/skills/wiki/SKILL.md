@@ -70,6 +70,36 @@ Then handle whatever the user actually messaged about.
 
 The scanner has a daily USD cap tracked at `.openclaw-wiki/scan-budget.json`. If `blocked` is set on that file, the cap was hit today — tell Maurizio if he asks why candidates look thin. The cap resets at local midnight automatically.
 
+### 3. Dream-cycle shadow proposals → `.openclaw-wiki/enrichment/<slug>/proposed.md`
+
+The `wiki-dream-nightly` cron runs at 03:00 CET every night. It scans for thin pages (low claim count, low confidence), runs a Haiku-class LLM pass on each, and writes a proposal to `.openclaw-wiki/enrichment/<slug>/proposed.md`. **The dream cycle NEVER writes to live pages** — shadow files are the whole discipline.
+
+On wake, list any pending proposals:
+
+```bash
+ls -1 .openclaw-wiki/enrichment/*/proposed.md 2>/dev/null
+```
+
+For each proposal:
+1. Read the proposal and the corresponding live page
+2. Decide what to apply:
+   - **Summary** — if the 3-sentence summary is accurate, append it to the live page's body (inside a `## Summary` section if one exists, otherwise create one)
+   - **Proposed claims** — for each claim, decide whether it's load-bearing and citable. If yes, add it to the page's `claims:` frontmatter array with the standard structure and a `[Source: dream-cycle, <proposal file>, YYYY-MM-DD]` attribution
+   - **Suggested cross-links** — only add links whose target basenames actually exist (check the index first). Skip hallucinated targets
+   - **Contradictions flagged** — surface these to Maurizio in chat. Do not auto-resolve
+   - **Research questions** — add to the page's `questions:` frontmatter array or the `## Open questions` section
+3. After applying (or consciously discarding), delete the proposal:
+   ```bash
+   rm .openclaw-wiki/enrichment/<slug>/proposed.md
+   rmdir .openclaw-wiki/enrichment/<slug> 2>/dev/null
+   ```
+
+The morning dream report at `reports/dream-YYYY-MM-DD.md` summarises the cycle — how many pages were scanned, how many proposals written, whether any tier hit its budget cap. Mention the report to Maurizio if there are notable items (contradictions, many proposals, errors).
+
+#### Dream-cycle budget awareness
+
+Per-tier daily caps live at `.openclaw-wiki/dream-budget.json`. If `blocked` is set, a tier hit its cap today — proposals thinned out. Caps reset at local midnight.
+
 ## OpenClaw-compatible vault layout
 
 This vault is OpenClaw-compatible. The directory structure (Phase 3 MECE taxonomy):
