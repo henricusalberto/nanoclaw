@@ -305,6 +305,9 @@ function findMentionsToWrap(
     // Originals are verbatim quotes — titles are full sentences that
     // repeat legitimately across prose. Skip as wrap targets.
     if (target.kind === 'original') continue;
+    // Hubs are navigation pages — their titles collide with common
+    // prose nouns ("People", "Me") and should never be wrapped.
+    if (target.kind === 'hub') continue;
     const title = (target.frontmatter.title as string | undefined) || '';
     if (title.length < 4 || !/^[A-Z]/.test(title)) continue;
     if (blocklist.has(title.toLowerCase())) continue;

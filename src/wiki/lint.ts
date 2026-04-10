@@ -162,10 +162,13 @@ function checkPage(
     }
   }
 
-  // missing-source-ids (warning, only for non-source/report pages)
+  // missing-source-ids (warning, only for non-source/report/hub pages).
+  // Hubs are navigation pages whose bodies are entirely managed blocks;
+  // asking them for provenance makes no sense.
   if (
     page.expectedKind !== 'source' &&
     page.expectedKind !== 'report' &&
+    page.expectedKind !== 'hub' &&
     (!Array.isArray(fm.sourceIds) || fm.sourceIds.length === 0)
   ) {
     issues.push({
@@ -478,6 +481,10 @@ function buildMentionTargetIndex(
     // Originals are verbatim quotes, not entities — their titles are full
     // sentences that legitimately repeat across prose. Skip as targets.
     if (target.kind === 'original') continue;
+    // Hubs are navigation pages with generic titles (People, Businesses,
+    // Playbooks, ...). Their words collide with common prose nouns and
+    // should never be auto-wikilinked.
+    if (target.kind === 'hub') continue;
     const title = target.frontmatter.title || '';
     if (title.length < 4 || !/^[A-Z]/.test(title)) continue;
     if (blocklist.has(title.toLowerCase())) continue;
