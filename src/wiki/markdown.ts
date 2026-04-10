@@ -42,7 +42,15 @@ export type WikiPageKind =
   | 'writing'
   | 'personal-note'
   | 'household-item'
-  | 'inbox-item';
+  | 'inbox-item'
+  /**
+   * Phase 6: navigation layer. Hubs are human-facing landing pages per
+   * life domain. Their bodies are almost entirely managed blocks
+   * refreshed by compile-time projection — the writer never touches
+   * them. One hub per page, lives under `wiki/hubs/`. `home.md` at
+   * the vault root is also a hub.
+   */
+  | 'hub';
 
 export interface WikiClaimEvidence {
   sourceId?: string;
@@ -82,6 +90,13 @@ export interface WikiPageFrontmatter {
   unsafeLocalConfiguredPath?: string;
   unsafeLocalRelativePath?: string;
   ingestedAt?: string;
+  // Phase 6: navigation layer
+  /** Hub this page contributes to. Compile's hub-projection groups by this field. */
+  hub?: string;
+  /** Classifier priority score for "Things to try" sorting (0..1). */
+  hubPriority?: number;
+  /** One-line summary the classifier generates for things-to-try rendering. */
+  hubOneLiner?: string;
   // NanoClaw-specific extras (preserved through round-trip but ignored by OpenClaw lint)
   [key: string]: unknown;
 }

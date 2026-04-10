@@ -36,9 +36,9 @@ export interface DreamBudgetConfig {
 export const DEFAULT_DREAM_BUDGET_CONFIG: DreamBudgetConfig = {
   capsUsd: {
     0: 0,
-    1: 1.0,
-    2: 2.0,
-    3: 0, // Tier 3 is manual only — no automatic cron budget
+    1: 1.0, // ~330 Haiku calls/day
+    2: 5.0, // ~100 Sonnet calls/day — handles growing vault without deferrals
+    3: 3.0, // ~10 Opus calls/day for the weekly Sunday sweep
   },
   tz: 'Europe/Berlin',
 };

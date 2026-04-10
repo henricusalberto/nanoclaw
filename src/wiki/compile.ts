@@ -38,6 +38,7 @@ import {
   renderRelatedBlock,
   summarizePage,
 } from './related.js';
+import { projectHubs } from './hub-projection.js';
 import { projectTimelines } from './timeline-projection.js';
 import {
   collectVaultPages,
@@ -79,6 +80,10 @@ export interface CompileResult {
   timelineEntriesTotal: number;
   graphNodes: number;
   graphEdges: number;
+  /** Phase 6: hub projection counts. */
+  hubPagesRewritten: number;
+  hubEntitiesLinked: number;
+  hubThingsToTryLinked: number;
   volumeLevel: ThresholdLevel;
   durationMs: number;
 }
@@ -314,6 +319,11 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
     parsedByPath,
   });
 
+  // Phase 6: project hubs. Writes into hubs/*.md + home.md. Runs after
+  // timeline projection so any hub linking to a project page sees the
+  // already-refreshed timeline body in the shared parsed cache.
+  const hubResult = projectHubs(vaultPath, records, { parsedByPath });
+
   // Reuse parsedByPath for digest building too.
   const digestInputs = summaries
     .map((summary) => {
@@ -396,6 +406,9 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
     timelineEntriesTotal: timelineResult.entriesTotal,
     graphNodes,
     graphEdges,
+    hubPagesRewritten: hubResult.hubPagesRewritten,
+    hubEntitiesLinked: hubResult.entitiesLinked,
+    hubThingsToTryLinked: hubResult.thingsToTryLinked,
     volumeLevel: volumeRecommendation.level,
     durationMs: Date.now() - startedAt,
   };
