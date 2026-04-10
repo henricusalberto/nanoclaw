@@ -15,7 +15,7 @@ import { runAutofix } from './autofix.js';
 import { syncWikiBridge } from './bridge.js';
 import { compileWiki } from './compile.js';
 import { runDreamCycle } from './dream-cycle.js';
-import { runEntityScan } from './entity-scan.js';
+import { backfillEntityScanFromSources, runEntityScan } from './entity-scan.js';
 import {
   computeBacklinks,
   neighbors,
@@ -32,6 +32,10 @@ import { applyMigrationPlan, buildMigrationPlan } from './migrate-vault.js';
 import { vaultPaths } from './paths.js';
 import { resolveForVault } from './resolver.js';
 import { resolveSlug } from './slug-resolver.js';
+import {
+  createStubsFromCandidates,
+  findStubCandidates,
+} from './stub-creator.js';
 import { collectVaultPages } from './vault-walk.js';
 import {
   diffVersions,
@@ -111,6 +115,7 @@ const VALUE_FLAGS = new Set([
   '--to',
   '--depth',
   '--name',
+  '--min-mentions',
 ]);
 
 async function main(): Promise<void> {
@@ -145,6 +150,20 @@ async function main(): Promise<void> {
       await cmdBridge(vaultPath);
       return;
     case 'entity-scan': {
+      const backfillSources = flags.includes('--backfill-sources');
+      if (backfillSources) {
+        console.log(`Entity scan (backfill memory sources): ${vaultPath}`);
+        const r = await backfillEntityScanFromSources(vaultPath);
+        console.log('\nBackfill complete:');
+        console.log(`  Pages processed:       ${r.windowsProcessed}`);
+        console.log(`  Entities extracted:    ${r.entitiesExtracted}`);
+        console.log(`  Originals extracted:   ${r.originalsExtracted}`);
+        console.log(`  Budget-blocked:        ${r.windowsSkippedBudget}`);
+        console.log(`  LLM calls:             ${r.llmCalls}`);
+        console.log(`  Estimated USD spent:   $${r.usdSpent.toFixed(4)}`);
+        console.log(`  Duration:              ${r.durationMs}ms`);
+        return;
+      }
       console.log(
         `Entity scan (${skipQuietHours ? 'morning flush' : 'windowed'}): ${vaultPath}`,
       );
@@ -163,6 +182,41 @@ async function main(): Promise<void> {
       console.log(`  LLM calls:             ${result.llmCalls}`);
       console.log(`  Estimated USD spent:   $${result.usdSpent.toFixed(4)}`);
       console.log(`  Duration:              ${result.durationMs}ms`);
+      return;
+    }
+    case 'stubs': {
+      const minMentions = parseInt(
+        getFlagValue(flags, args, '--min-mentions') ?? '3',
+        10,
+      );
+      console.log(
+        `Stub creator (dry-run=${apply ? 'no' : 'yes'}, minMentions=${minMentions}): ${vaultPath}`,
+      );
+      const candidates = findStubCandidates(vaultPath, { minMentions });
+      console.log(`\n${candidates.length} candidates above threshold:`);
+      for (const c of candidates.slice(0, 50)) {
+        const flag = c.autoCreate ? '✓' : '?';
+        console.log(
+          `  ${flag} ${c.name.padEnd(40)} → ${c.directory}/${c.basename}.md  (${c.mentionCount} mentions)`,
+        );
+      }
+      if (candidates.length > 50) {
+        console.log(`  ... and ${candidates.length - 50} more`);
+      }
+      if (!apply) {
+        const willCreate = candidates.filter((c) => c.autoCreate).length;
+        console.log(
+          `\n[DRY RUN] ${willCreate} pages would be created with --apply.`,
+        );
+        return;
+      }
+      const result = createStubsFromCandidates(vaultPath, candidates, {
+        minMentions,
+      });
+      console.log(`\nStub creation complete:`);
+      console.log(`  Pages written:         ${result.written}`);
+      console.log(`  Skipped (low conf):    ${result.skippedLowConfidence}`);
+      console.log(`  Skipped (existing):    ${result.skippedExisting}`);
       return;
     }
     case 'dream': {

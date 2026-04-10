@@ -537,3 +537,185 @@ export async function runEntityScan(
   result.durationMs = Date.now() - startedAt;
   return result;
 }
+
+// =============================================================================
+// One-shot backfill against bridged source pages
+// =============================================================================
+
+export interface BackfillSourcesOptions {
+  adapter?: LlmAdapter;
+  now?: Date;
+  /**
+   * Cap on the number of pages to process. Defaults to 200, which at
+   * ~$0.003/call keeps a single backfill comfortably under the daily
+   * budget. Pass `Infinity` for "process everything" — but check the
+   * budget first.
+   */
+  maxPages?: number;
+}
+
+/**
+ * Walk every bridged memory source page (daily-note, memory-root,
+ * user-context — NOT bookmark/extracted-asset which already have
+ * structured metadata) and run them through the same Haiku extraction
+ * the live windowed scanner uses. Appends candidates to
+ * entity-candidates.jsonl for Janus to curate.
+ *
+ * Designed for one-shot use after vault initialization or after
+ * importing a backlog of memory files. Budget-gated like the live
+ * scanner, but each page is its own "window" so the budget per call
+ * is predictable.
+ */
+export async function backfillEntityScanFromSources(
+  vaultPath: string,
+  opts: BackfillSourcesOptions = {},
+): Promise<EntityScanResult> {
+  const startedAt = Date.now();
+  const now = opts.now ?? new Date();
+  const result: EntityScanResult = {
+    vaultPath,
+    windowsProcessed: 0,
+    windowsRejectedByPrefilter: 0,
+    windowsSkippedQuietHours: 0,
+    windowsSkippedBudget: 0,
+    entitiesExtracted: 0,
+    originalsExtracted: 0,
+    llmCalls: 0,
+    usdSpent: 0,
+    durationMs: 0,
+  };
+
+  const bridgeCfg = readBridgeConfig(vaultPath);
+  const cfg: EntityScanConfig =
+    bridgeCfg.entityScan ?? DEFAULT_ENTITY_SCAN_CONFIG;
+  // Backfill ignores `enabled: false` — it's an explicit one-shot
+  // operation the user invokes manually, not a background cron.
+
+  const sourcesDir = path.join(vaultPath, 'sources');
+  if (!fs.existsSync(sourcesDir)) {
+    result.durationMs = Date.now() - startedAt;
+    return result;
+  }
+
+  // Memory source pages have bridgeKind in this set; bookmarks and
+  // future asset extractors don't.
+  const MEMORY_KINDS = new Set(['daily-note', 'memory-root', 'user-context']);
+
+  const adapter = opts.adapter ?? new ClaudeCliAdapter();
+  const maxPages = opts.maxPages ?? 200;
+
+  const candidates = fs
+    .readdirSync(sourcesDir)
+    .filter((f) => f.endsWith('.md') && f !== 'index.md')
+    .map((f) => path.join(sourcesDir, f));
+
+  let processed = 0;
+  for (const filePath of candidates) {
+    if (processed >= maxPages) break;
+
+    let raw: string;
+    try {
+      raw = fs.readFileSync(filePath, 'utf-8');
+    } catch {
+      continue;
+    }
+
+    // Quick frontmatter sniff for bridgeKind. Avoid full YAML parse
+    // since the bodies are large; the line-based check is enough.
+    const fmEnd = raw.indexOf('\n---', 4);
+    const fm = fmEnd > 0 ? raw.slice(0, fmEnd) : '';
+    const kindMatch = /^bridgeKind:\s*(\S+)/m.exec(fm);
+    if (!kindMatch) continue;
+    if (!MEMORY_KINDS.has(kindMatch[1])) continue;
+
+    // Strip the bridge metadata table and the fenced ```markdown wrapper
+    // to recover the original memory text. The fence is the section we
+    // want to extract from.
+    const fenceMatch = /```markdown\n([\s\S]*?)\n```/.exec(raw);
+    const text = fenceMatch ? fenceMatch[1] : raw;
+
+    if (text.length < 80) continue;
+
+    // Budget pre-check.
+    const approxInputTokens = Math.ceil(text.length / 4) + 200;
+    const approxOutputTokens = 400;
+    const est = estimateUsd(approxInputTokens, approxOutputTokens);
+    const check = checkBudget(
+      vaultPath,
+      cfg.dailyBudgetUsd,
+      est,
+      now,
+      cfg.quietHoursTz,
+    );
+    if (!check.allowed) {
+      result.windowsSkippedBudget++;
+      markBlocked(vaultPath, check.reason ?? 'budget exhausted', check.state);
+      break; // stop the whole backfill once blocked
+    }
+
+    let extraction: LlmExtractionResult;
+    try {
+      const rawResult = await adapter.extract(text);
+      extraction = validateExtraction(rawResult, text);
+    } catch (err) {
+      logger.warn(
+        { err: String(err), source: path.basename(filePath) },
+        'entity-scan backfill: adapter threw',
+      );
+      extraction = { entities: [], originals: [] };
+    }
+
+    recordSpend(vaultPath, est, check.state, now, cfg.quietHoursTz);
+    result.llmCalls++;
+    result.usdSpent += est;
+    result.windowsProcessed++;
+    processed++;
+
+    const sourceBasename = path.basename(filePath, '.md');
+    const extractedAt = new Date().toISOString();
+    const out: EntityCandidate[] = [];
+    for (const e of extraction.entities) {
+      out.push({
+        kind: 'entity-candidate',
+        name: e.name,
+        entityType: e.type,
+        quote: e.quote,
+        window: {
+          windowId: `backfill:${sourceBasename}`,
+          groupFolder: 'backfill-source',
+          openedAt: extractedAt,
+          closedAt: extractedAt,
+        },
+        extractedAt,
+      });
+    }
+    for (const o of extraction.originals) {
+      out.push({
+        kind: 'original-thinking',
+        name: '',
+        quote: o.quote,
+        window: {
+          windowId: `backfill:${sourceBasename}`,
+          groupFolder: 'backfill-source',
+          openedAt: extractedAt,
+          closedAt: extractedAt,
+        },
+        extractedAt,
+      });
+    }
+    appendCandidates(vaultPath, out);
+    result.entitiesExtracted += extraction.entities.length;
+    result.originalsExtracted += extraction.originals.length;
+  }
+
+  appendWikiLogEvent(vaultPath, 'entity-scan', {
+    phase: 'backfill-sources',
+    pagesProcessed: result.windowsProcessed,
+    entitiesExtracted: result.entitiesExtracted,
+    originalsExtracted: result.originalsExtracted,
+    usdSpent: result.usdSpent,
+  });
+
+  result.durationMs = Date.now() - startedAt;
+  return result;
+}

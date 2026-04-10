@@ -122,6 +122,19 @@ function buildVolumeMounts(
         readonly: false,
       });
     }
+
+    // Wiki-inbox vault — writable so main-group cron tasks (entity-scan,
+    // dream-cycle, bookmark-sync) can produce candidates, shadow files,
+    // and source pages. The /workspace/project mount is read-only so
+    // these writes would otherwise fail.
+    const wikiInboxDir = path.join(GROUPS_DIR, 'telegram_wiki-inbox');
+    if (fs.existsSync(wikiInboxDir)) {
+      mounts.push({
+        hostPath: wikiInboxDir,
+        containerPath: '/workspace/wiki-inbox',
+        readonly: false,
+      });
+    }
   } else {
     // Other groups only get their own folder
     mounts.push({

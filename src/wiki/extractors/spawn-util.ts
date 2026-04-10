@@ -108,7 +108,10 @@ export async function spawnCapture(
 
     if (opts.stdin !== undefined) {
       child.stdin.write(opts.stdin);
-      child.stdin.end();
     }
+    // Always close stdin: the claude CLI hangs for 3s waiting for piped
+    // input otherwise, then exits 1 with "no stdin data received". When
+    // we have no stdin payload, this just sends EOF immediately.
+    child.stdin.end();
   });
 }

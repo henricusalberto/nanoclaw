@@ -33,27 +33,27 @@ export class FieldtheoryExtractor implements Extractor {
       throw new Error('fieldtheory extractor needs a bookmarkId');
     const rawId = input.bookmarkId.replace(/^ft:/, '');
 
-    const { stdout } = await spawnCapture(
-      'ft',
-      ['show', rawId, '--format', 'json'],
-      { timeoutMs: 30_000 },
-    );
+    const { stdout } = await spawnCapture('ft', ['show', rawId, '--json'], {
+      timeoutMs: 30_000,
+    });
 
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(stdout);
+      parsed = JSON.parse(stripBanner(stdout));
     } catch {
       throw new Error(`ft show ${rawId} returned non-JSON`);
     }
 
     const text = asString(parsed.text) ?? asString(parsed.body) ?? '';
-    const author = asString(parsed.author) ?? 'unknown';
+    const author =
+      asString(parsed.authorHandle) ?? asString(parsed.authorName) ?? 'unknown';
     const url = asString(parsed.url) ?? '';
     const bookmarkedAt = asString(parsed.bookmarkedAt) ?? '';
-    const category = asString(parsed.category);
-    const domain = asString(parsed.domain);
+    const category = asString(parsed.primaryCategory);
+    const domain = asString(parsed.primaryDomain);
     const title =
-      asString(parsed.title) ?? `${author}: ${text.slice(0, 60)}`.trim();
+      asString(parsed.title) ??
+      `${author}: ${text.slice(0, 60).replace(/\s+/g, ' ').trim()}`;
 
     const bodyLines = [
       `**Author:** ${author}`,
@@ -85,21 +85,24 @@ function asString(v: unknown): string | undefined {
 }
 
 /**
- * List bookmarks added since `afterIso`. Wrapped here so the bridge
- * pull-source loop has a single import path for both listing and
- * per-bookmark extraction. Returns an empty array on any failure —
- * pull sources must never crash a bridge sync.
+ * List bookmarks added since `afterIso`. Returns up to 9999 in a
+ * single call (ft's default --limit is 30). Returns an empty array
+ * on any failure — pull sources must never crash a bridge sync.
+ *
+ * `ft list --after` accepts YYYY-MM-DD; we slice the ISO timestamp
+ * to that shape.
  */
 export async function listFieldtheoryBookmarks(
   afterIso: string,
 ): Promise<FieldtheoryBookmarkSummary[]> {
   try {
+    const afterDate = afterIso.slice(0, 10);
     const { stdout } = await spawnCapture(
       'ft',
-      ['list', '--format', 'json', '--after', afterIso],
-      { timeoutMs: 30_000 },
+      ['list', '--json', '--after', afterDate, '--limit', '9999'],
+      { timeoutMs: 60_000, maxStdoutBytes: 64 * 1024 * 1024 },
     );
-    const parsed = JSON.parse(stdout);
+    const parsed = JSON.parse(stripBanner(stdout));
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
@@ -109,16 +112,30 @@ export async function listFieldtheoryBookmarks(
       .map((r) => ({
         id: asString(r.id) ?? '',
         title: asString(r.title),
-        author: asString(r.author),
+        author: asString(r.authorHandle) ?? asString(r.authorName),
         url: asString(r.url),
         bookmarkedAt: asString(r.bookmarkedAt),
-        category: asString(r.category),
-        domain: asString(r.domain),
+        category: asString(r.primaryCategory),
+        domain: asString(r.primaryDomain),
       }))
       .filter((b) => b.id !== '');
   } catch {
     return [];
   }
+}
+
+/**
+ * `ft` prints an ANSI-escaped decorative banner before its JSON
+ * output. The banner contains literal `[` characters inside the
+ * escape sequences (`\x1b[2m...`), so we strip ANSI escapes first
+ * and THEN look for the first JSON-starter at the beginning of a
+ * line.
+ */
+function stripBanner(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  const noAnsi = s.replace(/\x1b\[[0-9;]*m/g, '');
+  const m = noAnsi.match(/^[\s]*([[{][\s\S]*)$/m);
+  return m ? m[1] : noAnsi;
 }
 
 export interface FieldtheoryBookmarkSummary {

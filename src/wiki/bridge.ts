@@ -462,12 +462,17 @@ function buildExtractedFrontmatter(params: {
  * Build a pure-virtual ResolvedSourceFile for a pull-source bookmark.
  * Pull sources have no real file on disk — we synthesise the path from
  * the source id + bookmark id so downstream slug/key logic works.
+ *
+ * `mtimeMs` MUST be stable across runs (not Date.now()) — otherwise
+ * the bridge's shouldSkipImportedSourceWrite check fails on every run
+ * and we re-extract every bookmark every time. We use the bookmark's
+ * own `bookmarkedAt` if present, otherwise 0.
  */
 function syntheticResolvedFileForBookmark(params: {
   sourceConfig: BridgeSourceConfig;
   bookmarkId: string;
   repoRoot: string;
-  ingestedAtMs: number;
+  bookmarkedAtMs: number;
 }): ResolvedSourceFile {
   const virtualRelative = `${params.sourceConfig.id}/${params.bookmarkId}`;
   return {
@@ -476,7 +481,7 @@ function syntheticResolvedFileForBookmark(params: {
     relativePath: virtualRelative,
     basename: params.bookmarkId,
     size: 0,
-    mtimeMs: params.ingestedAtMs,
+    mtimeMs: params.bookmarkedAtMs,
   };
 }
 
@@ -686,14 +691,28 @@ async function processPullSource(params: {
     return;
   }
 
-  const ingestedAtMs = Date.now();
+  // Pull sources keep cumulative state — `lastSyncAt` filters NEW
+  // bookmarks but everything previously imported is still owned by
+  // this source. Mark every prior pull-state entry as still-active so
+  // the prune step at the end of syncWikiBridge doesn't delete the
+  // 900+ pages we wrote on a previous run.
+  const sourceIdPrefix = `${sourceConfig.id}/`;
+  for (const [key, entry] of Object.entries(state.entries)) {
+    if (entry.sourcePath.startsWith(`pull://${sourceIdPrefix}`)) {
+      activeKeys.add(key);
+    }
+  }
 
   for (const bookmark of bookmarks) {
+    // Stable mtime: prefer the bookmark's bookmarkedAt; fall back to 0.
+    const bookmarkedAtMs = bookmark.bookmarkedAt
+      ? Date.parse(bookmark.bookmarkedAt) || 0
+      : 0;
     const virtualFile = syntheticResolvedFileForBookmark({
       sourceConfig,
       bookmarkId: bookmark.id,
       repoRoot,
-      ingestedAtMs,
+      bookmarkedAtMs,
     });
     const syncKey = resolveArtifactKey(virtualFile.absolutePath);
     activeKeys.add(syncKey);
