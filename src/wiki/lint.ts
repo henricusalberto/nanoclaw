@@ -45,9 +45,29 @@ const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
   { dir: 'syntheses', kind: 'synthesis' },
   { dir: 'sources', kind: 'source' },
   { dir: 'originals', kind: 'original' },
+  // Phase 3 — MECE taxonomy expansion.
+  { dir: 'people', kind: 'person' },
+  { dir: 'companies', kind: 'company' },
+  { dir: 'meetings', kind: 'meeting' },
+  { dir: 'deals', kind: 'deal' },
+  { dir: 'projects', kind: 'project' },
+  { dir: 'ideas', kind: 'idea' },
+  { dir: 'writing', kind: 'writing' },
+  { dir: 'personal', kind: 'personal-note' },
+  { dir: 'household', kind: 'household-item' },
+  { dir: 'inbox', kind: 'inbox-item' },
   // reports/ deliberately excluded — those are lint's own output, linting
   // them would be circular noise
 ];
+
+// Phase 3: every recognised page kind. Built from VAULT_DIRS plus
+// `report` (which lives in reports/ but is excluded from the lint
+// walk itself). Used by `unknown-page-type` to reject typos or kinds
+// that were removed from the union.
+const KNOWN_PAGE_KINDS: Set<string> = new Set([
+  ...VAULT_DIRS.map((v) => v.kind),
+  'report',
+]);
 
 export type LintSeverity = 'error' | 'warning' | 'info';
 
@@ -71,7 +91,9 @@ export type LintCheckCode =
   // Phase 1 — Audit Floor
   | 'claim-missing-attribution'
   | 'unlinked-entity-mention'
-  | 'timeline-missing-attribution';
+  | 'timeline-missing-attribution'
+  // Phase 3 — MECE taxonomy
+  | 'unknown-page-type';
 
 export interface LintIssue {
   code: LintCheckCode;
@@ -253,13 +275,24 @@ function checkPage(
     });
   }
 
-  // missing-page-type
+  // missing-page-type / unknown-page-type / page-type-mismatch
   if (!fm.pageType) {
     issues.push({
       code: 'missing-page-type',
       severity: 'error',
       pagePath: page.relativePath,
       message: 'page is missing required `pageType` frontmatter field',
+    });
+  } else if (!KNOWN_PAGE_KINDS.has(fm.pageType)) {
+    // Phase 3: a pageType that doesn't map to any directory in the
+    // taxonomy is a harder error than page-type-mismatch — the value
+    // is outright invalid. Surface it distinctly so Janus knows to fix
+    // the frontmatter, not move the file.
+    issues.push({
+      code: 'unknown-page-type',
+      severity: 'error',
+      pagePath: page.relativePath,
+      message: `pageType=\`${fm.pageType}\` is not one of the recognised kinds`,
     });
   } else if (fm.pageType !== page.expectedKind) {
     issues.push({

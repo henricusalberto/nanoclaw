@@ -24,7 +24,25 @@ export type WikiPageKind =
    * Dream Cycle never rewrites them. They live under `wiki/originals/`
    * and preserve the user's own phrasing.
    */
-  | 'original';
+  | 'original'
+  /**
+   * Phase 3: MECE taxonomy. The generic `entity` kind was a catch-all
+   * that hid important distinctions — a person and a company both used
+   * to be `entity`. Each new kind lives in its own directory so the
+   * resolver can dispatch by shape + type, and lint fails pages placed
+   * in the wrong directory. `entity` stays around for round-trip compat
+   * with vaults written by older versions.
+   */
+  | 'person'
+  | 'company'
+  | 'meeting'
+  | 'deal'
+  | 'project'
+  | 'idea'
+  | 'writing'
+  | 'personal-note'
+  | 'household-item'
+  | 'inbox-item';
 
 export interface WikiClaimEvidence {
   sourceId?: string;

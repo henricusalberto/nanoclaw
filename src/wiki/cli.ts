@@ -19,7 +19,9 @@ import { ExtractorInput } from './extractors/base.js';
 import { getDefaultRegistry } from './extractors/registry.js';
 import { lintWiki } from './lint.js';
 import { serializeWikiPage, WikiPageFrontmatter } from './markdown.js';
+import { applyMigrationPlan, buildMigrationPlan } from './migrate-vault.js';
 import { vaultPaths } from './paths.js';
+import { resolveForVault } from './resolver.js';
 
 const DEFAULT_VAULT = 'groups/telegram_wiki-inbox/wiki';
 
@@ -78,7 +80,14 @@ async function cmdBridge(vaultPath: string): Promise<void> {
 // Flags that consume the next argv as their value. When we split args
 // into positional vs flag sets, the value immediately following one of
 // these must NOT be treated as a positional or vault-path.
-const VALUE_FLAGS = new Set(['--url', '--file', '--bookmark-id']);
+const VALUE_FLAGS = new Set([
+  '--url',
+  '--file',
+  '--bookmark-id',
+  '--title',
+  '--type',
+  '--hint',
+]);
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -121,6 +130,62 @@ async function main(): Promise<void> {
       console.log(`  LLM calls:             ${result.llmCalls}`);
       console.log(`  Estimated USD spent:   $${result.usdSpent.toFixed(4)}`);
       console.log(`  Duration:              ${result.durationMs}ms`);
+      return;
+    }
+    case 'resolve': {
+      const title = getFlagValue(flags, args, '--title');
+      const type = getFlagValue(flags, args, '--type');
+      const hint = getFlagValue(flags, args, '--hint');
+      if (!title) {
+        console.error('resolve requires --title <string>');
+        process.exit(2);
+      }
+      const decision = resolveForVault(vaultPath, {
+        title,
+        pageType: type,
+        hint,
+      });
+      console.log(JSON.stringify(decision, null, 2));
+      return;
+    }
+    case 'migrate-vault': {
+      console.log(
+        `Building migration plan for vault: ${vaultPath} (${apply ? 'APPLY' : 'DRY RUN'})`,
+      );
+      const plan = buildMigrationPlan(vaultPath);
+      console.log(`\nPlan: ${plan.entries.length} pages scanned`);
+      console.log(`  Moving:  ${plan.movingCount}`);
+      console.log(`  Staying: ${plan.skippedCount}`);
+      if (plan.movingCount > 0) {
+        console.log('\nProposed moves:');
+        for (const e of plan.entries.filter((x) => x.willMove).slice(0, 80)) {
+          console.log(
+            `  ${e.currentPath}  →  ${e.newPath}  [${e.decision.ruleName} conf=${e.decision.confidence}]`,
+          );
+        }
+        if (plan.movingCount > 80) {
+          console.log(`  ... and ${plan.movingCount - 80} more`);
+        }
+      }
+      if (!apply) {
+        console.log(
+          '\n[DRY RUN] Review the plan, then re-run with --apply to execute.',
+        );
+        return;
+      }
+      console.log('\nApplying migration...');
+      const result = applyMigrationPlan(plan);
+      console.log('\nMigration complete:');
+      console.log(`  Moved:    ${result.movedCount}`);
+      console.log(`  Errors:   ${result.errors.length}`);
+      console.log(`  Backup:   ${result.backupDir}`);
+      console.log(`  Duration: ${result.durationMs}ms`);
+      if (result.errors.length > 0) {
+        console.log('\nErrors:');
+        for (const err of result.errors) {
+          console.log(`  ${err.path}: ${err.message}`);
+        }
+      }
       return;
     }
     case 'extract': {
@@ -296,6 +361,14 @@ async function main(): Promise<void> {
       console.log('  extract --url <url> | --file <path> | --bookmark-id <id>');
       console.log(
         '                    Run extractor registry on one input, write source page',
+      );
+      console.log('  resolve --title <s> [--type <kind>] [--hint <s>]');
+      console.log(
+        '                    Print the directory + kind the resolver would assign',
+      );
+      console.log('  migrate-vault [--apply]');
+      console.log(
+        '                    Run Phase 3 MECE migration (dry-run by default)',
       );
       console.log('');
       console.log('Default vault: ' + DEFAULT_VAULT);

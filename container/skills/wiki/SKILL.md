@@ -72,15 +72,62 @@ The scanner has a daily USD cap tracked at `.openclaw-wiki/scan-budget.json`. If
 
 ## OpenClaw-compatible vault layout
 
-This vault is OpenClaw-compatible. The directory structure is:
+This vault is OpenClaw-compatible. The directory structure (Phase 3 MECE taxonomy):
 
 | Dir | Page kind | What lives here |
 |---|---|---|
-| `entities/` | entity | People, businesses, products, tools, named things |
+| `people/` | person | Human beings — one page per individual |
+| `companies/` | company | Organizations, businesses, brands |
+| `projects/` | project | Actively built things with repo/spec/team |
+| `deals/` | deal | Financial transactions, contracts, negotiations |
+| `meetings/` | meeting | Dated meeting records and call notes |
+| `ideas/` | idea | Raw possibilities not yet being built |
+| `writing/` | writing | Essays, drafts, philosophical pieces |
+| `personal/` | personal-note | Private reflections, health, inner life |
+| `household/` | household-item | Domestic operations, properties, logistics |
+| `inbox/` | inbox-item | Unsorted captures awaiting curation |
 | `concepts/` | concept | Frameworks, methodologies, mental models |
 | `syntheses/` | synthesis | Narrative arcs, time-bounded reflections, executive summaries |
-| `sources/` | source | Raw immutable bridge-imported pages and manual drops |
+| `originals/` | original | Immutable verbatim thought capture (never edit) |
+| `sources/` | source | Raw bridge-imported pages and manual extracts |
 | `reports/` | report | Auto-generated dashboards (lint, contradictions) |
+| `entities/` | entity | **Legacy** — pre-Phase-3 catch-all. New pages never land here. |
+
+### Always call `wiki resolve` before creating a page
+
+Never guess which directory a new page belongs in — the resolver is deterministic and fast:
+
+```bash
+npx tsx src/wiki/cli.ts resolve --title "Dom Ingleston" --type person
+```
+
+Output is JSON with `directory`, `kind`, `expectedBasename`, `confidence`, and `reasoning`. Use those values directly — don't second-guess the decision unless `confidence < 0.5`, in which case read the reasoning and either override via resolver.json or ask Maurizio.
+
+When you disagree with the resolver's answer on a title that recurs, add it to `.openclaw-wiki/resolver.json` under `titleOverrides` so it's pinned forever:
+
+```json
+{
+  "titleOverrides": {
+    "Daily Sip": "company",
+    "Nightcap": "project"
+  },
+  "keywordHints": {
+    "project": ["growth-funnel", "attribution-stack"]
+  }
+}
+```
+
+### Vault migration (one-shot, ceremonial)
+
+The `wiki migrate-vault` subcommand is a one-shot upgrade path from the legacy `entities/` catch-all to the MECE taxonomy. It is **not** routine. Before running `--apply`:
+
+1. `npx tsx src/wiki/cli.ts migrate-vault` — inspect the dry-run plan
+2. Review every move with Maurizio — the resolver is deterministic but not omniscient
+3. Pin any wrong decisions via `resolver.json titleOverrides`
+4. Re-run the dry-run until satisfied
+5. Only then run `npx tsx src/wiki/cli.ts migrate-vault --apply`
+
+The migration snapshots a backup to `.openclaw-wiki/migration-backup/<timestamp>/` before moving anything. Recovery path: copy files back out, revert frontmatter edits, delete the migration-log entry.
 
 Every page has frontmatter with **OpenClaw schema**:
 

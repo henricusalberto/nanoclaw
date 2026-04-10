@@ -18,7 +18,8 @@ export type WikiLogEventType =
   | 'apply'
   | 'migration'
   | 'entity-scan'
-  | 'entity-enqueue';
+  | 'entity-enqueue'
+  | 'migrate-vault';
 
 export interface WikiLogEvent {
   ts: string;
