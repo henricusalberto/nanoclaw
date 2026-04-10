@@ -165,10 +165,29 @@ The user drops a source: a URL, PDF path, image, screenshot, pasted article, or 
 #### Step-by-step ingest
 
 1. **Acquire full content** — never trust summaries.
-   - URL → `curl -sLo sources/<filename> "<url>"` for files. For HTML pages, use `agent-browser open <url>` then `agent-browser snapshot` to extract full text. WebFetch returns summaries — avoid for ingestion.
-   - PDF → `pdf-reader extract <path> --layout` for layout-sensitive docs (tables, multi-column). Plain `pdf-reader extract <path>` otherwise. Save the PDF itself to `sources/`.
-   - Image → use the Read tool on the file path; it natively supports image files. Save a copy to `sources/` if it's not already there.
-   - Pasted text → save verbatim to `sources/<slug>.md` with frontmatter `source: paste`, `date: YYYY-MM-DD`.
+
+   **Fast path: `wiki extract`** (Phase 2.5). When the user shares a URL, drops a file, or references an X bookmark, prefer the unified extractor CLI over calling underlying tools manually:
+   ```bash
+   npx tsx src/wiki/cli.ts extract --url https://youtube.com/watch?v=abc123
+   npx tsx src/wiki/cli.ts extract --file /workspace/group/attachments/deck.pdf
+   npx tsx src/wiki/cli.ts extract --bookmark-id ft:<id>
+   ```
+   The extractor registry routes to the right underlying tool (yt-dlp, pdf-reader, agent-browser, x-tweet-fetcher, vision model, `ft`) and writes a standardized source page under `sources/extract/<slug>.md` with full provenance in frontmatter. Always use this when possible — it keeps every source page shaped identically so the rest of the pipeline doesn't care where content came from.
+
+   **Manual fallbacks** when `wiki extract` isn't appropriate (e.g., you want a custom filename, or you're already holding the content):
+   - URL to a file → `curl -sLo sources/<filename> "<url>"`
+   - PDF direct → `pdf-reader extract <path> --layout`
+   - Image → use the Read tool on the file path; it natively supports image files
+   - Pasted text → save verbatim to `sources/<slug>.md` with frontmatter `source: paste`, `date: YYYY-MM-DD`
+   - WebFetch summarises. Avoid for ingestion.
+
+   **Bookmark routing rules** (Phase 2.5 — fieldtheory pull source). Every morning at 06:00 CET the `wiki-bookmark-sync-daily` cron pulls new X bookmarks via `ft` and lands them as source pages under `sources/` with `ftCategory` and `ftDomain` in frontmatter. When you promote a bookmark to wiki content, use those fields to pick the right hub:
+   - `ftDomain: marketing` + `ftCategory: technique|tool|research` → Meta Ads / growth hub pages
+   - `ftDomain: ai` → AI tools/concepts pages
+   - `ftCategory: opinion|research` → reading/media bucket
+   - Unknown combos → ask Maurizio where it belongs before filing
+
+   **Extractor failures are graceful** — if yt-dlp or agent-browser or the vision model fails, the bridge still creates a reference-only stub page pointing at the original asset. If you see a source page with body content like `**Extraction failed.**`, surface that to Maurizio so he knows the tool chain needs attention; don't try to compensate by summarising from memory.
 
 2. **Read fully and reflect.** Don't summarize until you've read the whole thing.
 

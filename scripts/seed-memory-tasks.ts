@@ -24,6 +24,7 @@ const SYNTHESIZE_TASK_ID = 'memory-synthesize-daily';
 const ARCHIVE_TASK_ID = 'memory-archive-weekly';
 const ENTITY_SCAN_HOURLY_TASK_ID = 'wiki-entity-scan-hourly';
 const ENTITY_SCAN_MORNING_TASK_ID = 'wiki-entity-scan-morning';
+const BOOKMARK_SYNC_TASK_ID = 'wiki-bookmark-sync-daily';
 
 const SYNTHESIZE_CRON = '0 23 * * *';
 const ARCHIVE_CRON = '0 4 * * 0';
@@ -32,6 +33,8 @@ const ARCHIVE_CRON = '0 4 * * 0';
 const ENTITY_SCAN_HOURLY_CRON = '5 * * * *';
 // Morning flush at 07:05 CET drains the overnight queue in one pass.
 const ENTITY_SCAN_MORNING_CRON = '5 7 * * *';
+// Phase 2.5: pull new X bookmarks via fieldtheory every morning at 06:00 CET.
+const BOOKMARK_SYNC_CRON = '0 6 * * *';
 
 // In-container bash script: runs the wiki CLI, prints JSON result. The
 // {wakeAgent: false} marker keeps the scheduler from spawning Janus for
@@ -53,6 +56,18 @@ echo '{"wakeAgent": false}'`;
 
 const ENTITY_SCAN_PROMPT =
   'Process conversation-window entity queue (handled by script — agent should not be woken).';
+
+// Phase 2.5: bookmark sync cron — runs the bridge, which walks pull sources.
+// The bridge handles fieldtheory internally; no agent wake required.
+const BOOKMARK_SYNC_SCRIPT = `#!/bin/bash
+set -e
+cd /workspace/project
+npx tsx src/wiki/cli.ts bridge > /tmp/wiki-bookmark-sync.log 2>&1 || true
+tail -30 /tmp/wiki-bookmark-sync.log
+echo '{"wakeAgent": false}'`;
+
+const BOOKMARK_SYNC_PROMPT =
+  'Sync X bookmarks via fieldtheory into wiki sources/ (handled by script — agent should not be woken).';
 
 const SYNTHESIZE_PROMPT = `Synthesize today's memory files into MEMORY.md.
 
@@ -172,6 +187,15 @@ function main(): void {
     prompt: ENTITY_SCAN_PROMPT,
     script: ENTITY_SCAN_MORNING_SCRIPT,
     cron: ENTITY_SCAN_MORNING_CRON,
+  });
+
+  upsertTask({
+    id: BOOKMARK_SYNC_TASK_ID,
+    groupFolder: group.folder,
+    chatJid,
+    prompt: BOOKMARK_SYNC_PROMPT,
+    script: BOOKMARK_SYNC_SCRIPT,
+    cron: BOOKMARK_SYNC_CRON,
   });
 
   console.log('Done. Memory tasks seeded.');

@@ -26,6 +26,20 @@ export interface SourceSyncEntry {
 export interface SourceSyncState {
   version: 1;
   entries: Record<string, SourceSyncEntry>;
+  /**
+   * Phase 2.5: per-pull-source last-run marker. Keyed by bridge source
+   * `id` (not sha1-hashed path), holds the most recent successful sync
+   * timestamp so the next run can pass `--after <lastSyncAt>` to the
+   * pull command. Optional for backwards compat with vaults written by
+   * older NanoClaw.
+   */
+  pullState?: Record<string, PullSourceState>;
+}
+
+export interface PullSourceState {
+  lastSyncAt: string;
+  lastExtractorVersion?: string;
+  lastBookmarkCount?: number;
 }
 
 const EMPTY_STATE: SourceSyncState = { version: 1, entries: {} };
@@ -136,22 +150,56 @@ export function pruneImportedSourceEntries(params: {
  * Compute the fingerprint of the bridge page template inputs. When this
  * function's inputs change (e.g., we add a new frontmatter field, change
  * the wrapping markers), every bridged page is re-rendered automatically.
+ *
+ * Phase 2.5 extension: `extractorName` + `extractorVersion` are mixed in
+ * so bumping an extractor's version (e.g., PDF extractor output format
+ * changes) forces re-extraction of every page it produced. Omit both
+ * for legacy markdown-only sources to preserve the original fingerprint.
  */
 export function computeRenderFingerprint(params: {
   artifactKind: string;
   sourceRelativePath: string;
   agentIds: string[];
   templateVersion: number;
+  extractorName?: string;
+  extractorVersion?: string;
 }): string {
+  const payload: Record<string, unknown> = {
+    artifactKind: params.artifactKind,
+    sourceRelativePath: params.sourceRelativePath,
+    agentIds: [...params.agentIds].sort(),
+    templateVersion: params.templateVersion,
+  };
+  if (params.extractorName) payload.extractorName = params.extractorName;
+  if (params.extractorVersion)
+    payload.extractorVersion = params.extractorVersion;
   return crypto
     .createHash('sha1')
-    .update(
-      JSON.stringify({
-        artifactKind: params.artifactKind,
-        sourceRelativePath: params.sourceRelativePath,
-        agentIds: [...params.agentIds].sort(),
-        templateVersion: params.templateVersion,
-      }),
-    )
+    .update(JSON.stringify(payload))
     .digest('hex');
+}
+
+/**
+ * Read the stored `PullSourceState` for a bridge source, defaulting to
+ * epoch zero so the first run fetches everything available. Safe on a
+ * fresh vault — `pullState` may be undefined.
+ */
+export function readPullSourceState(
+  state: SourceSyncState,
+  sourceId: string,
+): PullSourceState {
+  return (
+    state.pullState?.[sourceId] ?? {
+      lastSyncAt: '1970-01-01T00:00:00.000Z',
+    }
+  );
+}
+
+export function writePullSourceState(
+  state: SourceSyncState,
+  sourceId: string,
+  pullState: PullSourceState,
+): void {
+  if (!state.pullState) state.pullState = {};
+  state.pullState[sourceId] = pullState;
 }

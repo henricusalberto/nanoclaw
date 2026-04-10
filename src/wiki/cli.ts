@@ -8,15 +8,48 @@
  *   npx tsx src/wiki/cli.ts autofix --apply     # apply auto-repair
  */
 
+import fs from 'fs';
 import path from 'path';
 
 import { runAutofix } from './autofix.js';
 import { syncWikiBridge } from './bridge.js';
 import { compileWiki } from './compile.js';
 import { runEntityScan } from './entity-scan.js';
+import { ExtractorInput } from './extractors/base.js';
+import { getDefaultRegistry } from './extractors/registry.js';
 import { lintWiki } from './lint.js';
+import { serializeWikiPage, WikiPageFrontmatter } from './markdown.js';
+import { vaultPaths } from './paths.js';
 
 const DEFAULT_VAULT = 'groups/telegram_wiki-inbox/wiki';
+
+/**
+ * Read the value following a `--flag value` pair. Returns undefined if
+ * the flag isn't present. Used by `extract` to keep its interface aligned
+ * with standard CLI conventions instead of introducing a flag-value parser.
+ */
+function getFlagValue(
+  flags: string[],
+  args: string[],
+  flagName: string,
+): string | undefined {
+  const idx = args.indexOf(flagName);
+  if (idx === -1 || idx + 1 >= args.length) return undefined;
+  const next = args[idx + 1];
+  if (next.startsWith('--')) return undefined;
+  return next;
+}
+
+function sanitizeSlug(title: string, fallback: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return slug || fallback;
+}
 
 async function cmdBridge(vaultPath: string): Promise<void> {
   const repoRoot = process.cwd();
@@ -42,11 +75,24 @@ async function cmdBridge(vaultPath: string): Promise<void> {
   }
 }
 
+// Flags that consume the next argv as their value. When we split args
+// into positional vs flag sets, the value immediately following one of
+// these must NOT be treated as a positional or vault-path.
+const VALUE_FLAGS = new Set(['--url', '--file', '--bookmark-id']);
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const cmd = args[0];
   const flags = args.filter((a) => a.startsWith('--'));
-  const positional = args.slice(1).filter((a) => !a.startsWith('--'));
+  const positional: string[] = [];
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('--')) {
+      if (VALUE_FLAGS.has(a)) i++; // skip the flag's value
+      continue;
+    }
+    positional.push(a);
+  }
   const vaultArg = positional[0];
   const vaultPath = path.resolve(vaultArg || DEFAULT_VAULT);
   const apply = flags.includes('--apply');
@@ -66,13 +112,86 @@ async function main(): Promise<void> {
       console.log(
         `  Rejected (pre-filter): ${result.windowsRejectedByPrefilter}`,
       );
-      console.log(`  Quiet-hours deferred:  ${result.windowsSkippedQuietHours}`);
+      console.log(
+        `  Quiet-hours deferred:  ${result.windowsSkippedQuietHours}`,
+      );
       console.log(`  Budget deferred:       ${result.windowsSkippedBudget}`);
       console.log(`  Entities extracted:    ${result.entitiesExtracted}`);
       console.log(`  Originals extracted:   ${result.originalsExtracted}`);
       console.log(`  LLM calls:             ${result.llmCalls}`);
       console.log(`  Estimated USD spent:   $${result.usdSpent.toFixed(4)}`);
       console.log(`  Duration:              ${result.durationMs}ms`);
+      return;
+    }
+    case 'extract': {
+      const urlFlag = getFlagValue(flags, args, '--url');
+      const fileFlag = getFlagValue(flags, args, '--file');
+      const bookmarkFlag = getFlagValue(flags, args, '--bookmark-id');
+      if (!urlFlag && !fileFlag && !bookmarkFlag) {
+        console.error(
+          'extract requires one of --url <url>, --file <path>, --bookmark-id <id>',
+        );
+        process.exit(2);
+      }
+      let input: ExtractorInput;
+      if (urlFlag) input = { kind: 'url', url: urlFlag };
+      else if (fileFlag) input = { kind: 'file', path: path.resolve(fileFlag) };
+      else input = { kind: 'bookmark-id', bookmarkId: bookmarkFlag! };
+
+      console.log(
+        `Extracting ${input.kind}: ${urlFlag ?? fileFlag ?? bookmarkFlag}`,
+      );
+      const registry = getDefaultRegistry();
+      const content = await registry.extract(input);
+      console.log(
+        `  Extractor: ${content.extractorName}@${content.extractorVersion}`,
+      );
+      console.log(`  Title:     ${content.title}`);
+      console.log(`  Mime:      ${content.mimeType}`);
+      console.log(`  Body size: ${content.body.length} chars`);
+
+      // Write a source page into the default vault under sources/extract/
+      const outDir = path.join(vaultPath, 'sources', 'extract');
+      fs.mkdirSync(outDir, { recursive: true });
+      const slug = sanitizeSlug(content.title, content.extractorName);
+      const pageRel = path.join('sources', 'extract', `${slug}.md`);
+      const pageAbs = path.join(vaultPath, pageRel);
+      const frontmatter: WikiPageFrontmatter = {
+        id: `source.extract.${slug}`,
+        pageType: 'source',
+        title: content.title,
+        sourceIds: [],
+        claims: [],
+        contradictions: [],
+        questions: [],
+        confidence: 0.7,
+        status: 'active',
+        updatedAt: content.extractedAt,
+        sourceType: 'extracted-asset',
+        ingestedAt: content.extractedAt,
+        extractorName: content.extractorName,
+        extractorVersion: content.extractorVersion,
+        extractedAt: content.extractedAt,
+        extractorMimeType: content.mimeType,
+        extractorMetadata: content.metadata,
+        ...(content.originalUrl && { originalUrl: content.originalUrl }),
+        ...(content.originalPath && { originalPath: content.originalPath }),
+      };
+      const body = [
+        '## Source\n',
+        '| Field | Value |',
+        '|---|---|',
+        `| Extractor | \`${content.extractorName}@${content.extractorVersion}\` |`,
+        `| Extracted at | ${content.extractedAt} |`,
+        `| Mime type | \`${content.mimeType}\` |`,
+        `| Original | ${content.originalUrl ?? content.originalPath ?? '(none)'} |`,
+        '',
+        '## Content\n',
+        content.body.trim(),
+        '',
+      ].join('\n');
+      fs.writeFileSync(pageAbs, serializeWikiPage(frontmatter, body));
+      console.log(`\nWrote source page: ${pageRel}`);
       return;
     }
     case 'autofix': {
@@ -170,11 +289,13 @@ async function main(): Promise<void> {
       console.log(
         '  autofix [--apply] Auto-repair lint issues (dry-run by default)',
       );
-      console.log(
-        '  entity-scan [--morning]',
-      );
+      console.log('  entity-scan [--morning]');
       console.log(
         '                    Process conversation-window entity queue',
+      );
+      console.log('  extract --url <url> | --file <path> | --bookmark-id <id>');
+      console.log(
+        '                    Run extractor registry on one input, write source page',
       );
       console.log('');
       console.log('Default vault: ' + DEFAULT_VAULT);

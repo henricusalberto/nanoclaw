@@ -12,20 +12,52 @@ export type BridgeArtifactKind =
   | 'daily-note'
   | 'dream-report'
   | 'event-log'
-  | 'user-context';
+  | 'user-context'
+  /**
+   * Phase 2.5: non-markdown file routed through the extractor registry.
+   * Used for PDFs, images, HTML, audio, etc. dropped into a watched dir.
+   */
+  | 'extracted-asset';
+
+/**
+ * Phase 2.5: bridge sources come in two flavours.
+ *   - `file-glob` — the classic path: walk rootPath with a glob, bridge
+ *     each matching file. Markdown files bridge directly; non-markdown
+ *     go through the extractor registry.
+ *   - `pull` — periodic external fetch (e.g., fieldtheory `ft list`).
+ *     Runs on a cron schedule, produces bookmarks on demand. State
+ *     tracks `lastSyncAt` instead of per-file fingerprints.
+ */
+export type BridgeSourceType = 'file-glob' | 'pull';
 
 export interface BridgeSourceConfig {
   id: string;
   kind: BridgeArtifactKind;
   /**
+   * Source type discriminator. Defaults to `file-glob` for backwards
+   * compatibility with existing bridge.json files.
+   */
+  sourceType?: BridgeSourceType;
+  /**
    * Root path relative to the repo root. The glob is matched against
-   * files under this root.
+   * files under this root. Unused for pull sources.
    */
   rootPath: string;
   glob: string; // e.g. "*.md", "**/*.md", "memory/*.md"
   exclude?: string[]; // glob patterns to exclude
   agentIds?: string[];
   maxFileSizeBytes?: number; // skip if larger
+  /**
+   * Phase 2.5: for file-glob sources, opt-in allowlist of extractor
+   * names. Unset = use the default registry routing. Empty array = no
+   * extraction, markdown-only bridging.
+   */
+  extractors?: string[];
+  /**
+   * Phase 2.5: pull-source configuration.
+   */
+  pullCommand?: string;
+  pullExtractorName?: string;
 }
 
 export interface EntityScanConfig {

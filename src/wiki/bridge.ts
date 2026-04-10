@@ -18,13 +18,21 @@ import {
 import {
   computeRenderFingerprint,
   pruneImportedSourceEntries,
+  readPullSourceState,
   readSourceSyncState,
   resolveArtifactKey,
   shouldSkipImportedSourceWrite,
+  writePullSourceState,
   writeSourceSyncState,
 } from './bridge-state.js';
 import { compileWiki } from './compile.js';
 import { deriveConceptTags } from './concept-tags.js';
+import { ExtractedContent } from './extractors/base.js';
+import {
+  FieldtheoryBookmarkSummary,
+  listFieldtheoryBookmarks,
+} from './extractors/fieldtheory.js';
+import { getDefaultRegistry } from './extractors/registry.js';
 import { atomicWriteFile, readJsonOrDefault } from './fs-util.js';
 import { appendWikiLogEvent } from './log.js';
 import { serializeWikiPage, WikiPageFrontmatter } from './markdown.js';
@@ -269,7 +277,21 @@ const SOURCE_TYPE_BY_KIND: Record<BridgeArtifactKind, string> = {
   'dream-report': 'memory-bridge-dream',
   'event-log': 'memory-bridge-events',
   'user-context': 'memory-bridge-user-context',
+  'extracted-asset': 'extracted-asset',
 };
+
+/**
+ * Files whose extension is in MARKDOWN_EXTS stay on the legacy markdown
+ * path (read → snippet → fence). Everything else routes through the
+ * extractor registry. This preserves existing bridge behavior for the
+ * default config (which only globs `*.md`) and lets users opt in to
+ * extracted assets by adding a broader glob.
+ */
+const MARKDOWN_EXTS = new Set(['.md', '.markdown']);
+
+function isMarkdownFile(relativePath: string): boolean {
+  return MARKDOWN_EXTS.has(path.extname(relativePath).toLowerCase());
+}
 
 function kindToSourceType(kind: BridgeArtifactKind): string {
   return SOURCE_TYPE_BY_KIND[kind];
@@ -341,6 +363,371 @@ function renderBridgeBody(params: {
 }
 
 // =============================================================================
+// Phase 2.5: extracted assets — unified source page template
+// =============================================================================
+
+/**
+ * Render the unified body for any ExtractedContent. Every source page —
+ * PDF, YouTube, web article, tweet, image, bookmark — uses this shape so
+ * Janus treats them identically.
+ */
+function renderExtractedBody(params: {
+  content: ExtractedContent;
+  originalReference: string;
+}): string {
+  const lines: string[] = [];
+
+  lines.push('## Source\n');
+  lines.push('| Field | Value |');
+  lines.push('|---|---|');
+  lines.push(`| Title | ${escapeMarkdownTableCell(params.content.title)} |`);
+  lines.push(
+    `| Extractor | \`${params.content.extractorName}@${params.content.extractorVersion}\` |`,
+  );
+  lines.push(`| Extracted at | ${params.content.extractedAt} |`);
+  lines.push(`| Mime type | \`${params.content.mimeType}\` |`);
+  lines.push(`| Original | ${params.originalReference} |`);
+  lines.push('');
+
+  // Determine heading for the body payload. Transcripts from video get
+  // `## Transcript`; everything else gets `## Content`. This is purely
+  // cosmetic but helps Janus scan pages at a glance.
+  const bodyHeading =
+    params.content.mimeType === 'video/youtube'
+      ? '## Transcript'
+      : '## Content';
+  lines.push(bodyHeading + '\n');
+  lines.push(params.content.body.trim());
+  lines.push('');
+
+  // Notes block preserved across re-extraction via the same managed-block
+  // mechanism as the markdown bridge. Anything between the markers is
+  // rewritten by the NEXT extraction run — treat as ephemeral. Janus
+  // should promote persistent notes to a new wiki page.
+  lines.push('## Notes\n');
+  lines.push('<!-- openclaw:human:start -->');
+  lines.push('');
+  lines.push('<!-- openclaw:human:end -->');
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+function escapeMarkdownTableCell(s: string): string {
+  return s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
+function buildExtractedFrontmatter(params: {
+  pageId: string;
+  file: ResolvedSourceFile;
+  content: ExtractedContent;
+  ingestedAt: string;
+  repoRoot: string;
+}): WikiPageFrontmatter {
+  return {
+    id: params.pageId,
+    pageType: 'source',
+    title: params.content.title,
+    sourceIds: [],
+    claims: [],
+    contradictions: [],
+    questions: [],
+    confidence: 0.7,
+    status: 'active',
+    updatedAt: params.ingestedAt,
+    sourceType: 'extracted-asset',
+    sourcePath: params.file.absolutePath,
+    bridgeRelativePath: params.file.relativePath,
+    bridgeWorkspaceDir: params.repoRoot,
+    bridgeAgentIds: params.file.sourceConfig.agentIds || [],
+    ingestedAt: params.ingestedAt,
+    bridgeKind: params.file.sourceConfig.kind,
+    bridgeSourceId: params.file.sourceConfig.id,
+    extractorName: params.content.extractorName,
+    extractorVersion: params.content.extractorVersion,
+    extractedAt: params.content.extractedAt,
+    extractorMimeType: params.content.mimeType,
+    extractorMetadata: params.content.metadata,
+    ...(params.content.originalUrl && {
+      originalUrl: params.content.originalUrl,
+    }),
+  };
+}
+
+/**
+ * Build a pure-virtual ResolvedSourceFile for a pull-source bookmark.
+ * Pull sources have no real file on disk — we synthesise the path from
+ * the source id + bookmark id so downstream slug/key logic works.
+ */
+function syntheticResolvedFileForBookmark(params: {
+  sourceConfig: BridgeSourceConfig;
+  bookmarkId: string;
+  repoRoot: string;
+  ingestedAtMs: number;
+}): ResolvedSourceFile {
+  const virtualRelative = `${params.sourceConfig.id}/${params.bookmarkId}`;
+  return {
+    sourceConfig: params.sourceConfig,
+    absolutePath: `pull://${virtualRelative}`,
+    relativePath: virtualRelative,
+    basename: params.bookmarkId,
+    size: 0,
+    mtimeMs: params.ingestedAtMs,
+  };
+}
+
+async function processExtractedAsset(params: {
+  file: ResolvedSourceFile;
+  vaultPath: string;
+  repoRoot: string;
+  syncKey: string;
+  slug: string;
+  pageId: string;
+  pageRelativePath: string;
+  state: ReturnType<typeof readSourceSyncState>;
+  result: BridgeSyncResult;
+  ingestedAt: string;
+}): Promise<void> {
+  const {
+    file,
+    vaultPath,
+    repoRoot,
+    syncKey,
+    pageId,
+    pageRelativePath,
+    state,
+    result,
+    ingestedAt,
+  } = params;
+
+  // Mirror the legacy fingerprint but add the extractor identity so that
+  // bumping an extractor version forces re-extraction of every page it
+  // produced. We don't know the exact extractor until after routing, but
+  // the registry is stable across a process so we can look it up cheaply.
+  const registry = getDefaultRegistry();
+  const extractor = registry.route({
+    kind: 'file',
+    path: file.absolutePath,
+  });
+
+  const renderFingerprint = computeRenderFingerprint({
+    artifactKind: file.sourceConfig.kind,
+    sourceRelativePath: file.relativePath,
+    agentIds: file.sourceConfig.agentIds || [],
+    templateVersion: TEMPLATE_VERSION,
+    extractorName: extractor?.name ?? 'reference-only',
+    extractorVersion: extractor?.version ?? '1',
+  });
+
+  const skip = shouldSkipImportedSourceWrite({
+    vaultPath,
+    state,
+    syncKey,
+    expectedPagePath: pageRelativePath,
+    sourcePath: file.absolutePath,
+    sourceUpdatedAtMs: file.mtimeMs,
+    sourceSize: file.size,
+    renderFingerprint,
+  });
+
+  if (skip) {
+    result.skippedCount++;
+    return;
+  }
+
+  // Run the extractor. registry.extract() NEVER throws — it catches and
+  // converts failures into reference-only stub content.
+  const content = await registry.extract({
+    kind: 'file',
+    path: file.absolutePath,
+  });
+
+  const frontmatter = buildExtractedFrontmatter({
+    pageId,
+    file,
+    content,
+    ingestedAt,
+    repoRoot,
+  });
+  const body = renderExtractedBody({
+    content,
+    originalReference: `\`${file.relativePath}\``,
+  });
+  const pageContent = serializeWikiPage(frontmatter, body);
+
+  const fullPagePath = path.join(vaultPath, pageRelativePath);
+  const wasNew = !fs.existsSync(fullPagePath);
+
+  try {
+    atomicWriteFile(fullPagePath, pageContent);
+  } catch (err) {
+    result.errorCount++;
+    result.errors.push({
+      path: pageRelativePath,
+      op: 'write-extracted-page',
+      message: (err as Error).message,
+    });
+    return;
+  }
+
+  state.entries[syncKey] = {
+    group: 'bridge',
+    pagePath: pageRelativePath,
+    sourcePath: file.absolutePath,
+    sourceUpdatedAtMs: file.mtimeMs,
+    sourceSize: file.size,
+    renderFingerprint,
+  };
+
+  if (wasNew) result.importedCount++;
+  else result.updatedCount++;
+  result.changedSourceIds.push(pageId);
+}
+
+async function processPullSource(params: {
+  sourceConfig: BridgeSourceConfig;
+  vaultPath: string;
+  repoRoot: string;
+  state: ReturnType<typeof readSourceSyncState>;
+  activeKeys: Set<string>;
+  result: BridgeSyncResult;
+  ingestedAt: string;
+}): Promise<void> {
+  const {
+    sourceConfig,
+    vaultPath,
+    repoRoot,
+    state,
+    activeKeys,
+    result,
+    ingestedAt,
+  } = params;
+
+  // First (and only) pull extractor wired in Phase 2.5 is fieldtheory.
+  // Add more by dispatching on `sourceConfig.pullExtractorName`.
+  if (sourceConfig.pullExtractorName !== 'fieldtheory') {
+    result.errors.push({
+      path: sourceConfig.id,
+      op: 'pull-source',
+      message: `unknown pullExtractorName: ${sourceConfig.pullExtractorName}`,
+    });
+    result.errorCount++;
+    return;
+  }
+
+  const pullState = readPullSourceState(state, sourceConfig.id);
+  let bookmarks: FieldtheoryBookmarkSummary[];
+  try {
+    bookmarks = await listFieldtheoryBookmarks(pullState.lastSyncAt);
+  } catch (err) {
+    result.errors.push({
+      path: sourceConfig.id,
+      op: 'ft-list',
+      message: (err as Error).message,
+    });
+    result.errorCount++;
+    return;
+  }
+
+  const registry = getDefaultRegistry();
+  const ingestedAtMs = Date.now();
+
+  for (const bookmark of bookmarks) {
+    const virtualFile = syntheticResolvedFileForBookmark({
+      sourceConfig,
+      bookmarkId: bookmark.id,
+      repoRoot,
+      ingestedAtMs,
+    });
+    const syncKey = resolveArtifactKey(virtualFile.absolutePath);
+    activeKeys.add(syncKey);
+
+    const slug = buildBridgeSlug(sourceConfig, virtualFile);
+    const pageId = buildBridgePageId(slug);
+    const pageRelativePath = buildBridgePagePath(slug);
+
+    // Pull items are cheap: skip if we've already written this bookmark's
+    // page and the extractor version hasn't bumped.
+    const renderFingerprint = computeRenderFingerprint({
+      artifactKind: sourceConfig.kind,
+      sourceRelativePath: virtualFile.relativePath,
+      agentIds: sourceConfig.agentIds || [],
+      templateVersion: TEMPLATE_VERSION,
+      extractorName: 'fieldtheory',
+      extractorVersion: '1',
+    });
+    const existing = state.entries[syncKey];
+    if (
+      existing &&
+      existing.renderFingerprint === renderFingerprint &&
+      fs.existsSync(path.join(vaultPath, existing.pagePath))
+    ) {
+      result.skippedCount++;
+      continue;
+    }
+
+    const content = await registry.extract({
+      kind: 'bookmark-id',
+      bookmarkId: `ft:${bookmark.id}`,
+    });
+    const frontmatter = buildExtractedFrontmatter({
+      pageId,
+      file: virtualFile,
+      content,
+      ingestedAt,
+      repoRoot,
+    });
+    // Mix the pre-classified ft category/domain into frontmatter so
+    // Phase 3 hub routing can read them off the page.
+    if (bookmark.category) frontmatter.ftCategory = bookmark.category;
+    if (bookmark.domain) frontmatter.ftDomain = bookmark.domain;
+    if (bookmark.author) frontmatter.ftAuthor = bookmark.author;
+
+    const body = renderExtractedBody({
+      content,
+      originalReference: bookmark.url
+        ? `[${bookmark.url}](${bookmark.url})`
+        : '(no url)',
+    });
+    const pageContent = serializeWikiPage(frontmatter, body);
+
+    const fullPagePath = path.join(vaultPath, pageRelativePath);
+    const wasNew = !fs.existsSync(fullPagePath);
+    try {
+      atomicWriteFile(fullPagePath, pageContent);
+    } catch (err) {
+      result.errorCount++;
+      result.errors.push({
+        path: pageRelativePath,
+        op: 'write-pull-page',
+        message: (err as Error).message,
+      });
+      continue;
+    }
+
+    state.entries[syncKey] = {
+      group: 'bridge',
+      pagePath: pageRelativePath,
+      sourcePath: virtualFile.absolutePath,
+      sourceUpdatedAtMs: ingestedAtMs,
+      sourceSize: 0,
+      renderFingerprint,
+    };
+
+    if (wasNew) result.importedCount++;
+    else result.updatedCount++;
+    result.changedSourceIds.push(pageId);
+  }
+
+  // Advance the pull cursor so the next run starts from ingestedAt.
+  writePullSourceState(state, sourceConfig.id, {
+    lastSyncAt: ingestedAt,
+    lastExtractorVersion: '1',
+    lastBookmarkCount: bookmarks.length,
+  });
+}
+
+// =============================================================================
 // Main sync function
 // =============================================================================
 
@@ -366,6 +753,22 @@ export async function syncWikiBridge(
   const activeKeys = new Set<string>();
 
   for (const sourceConfig of config.sources) {
+    // Phase 2.5: pull sources fetch from an external command on a
+    // schedule rather than walking the filesystem. Fieldtheory is the
+    // first user; the handler is generic over extractors.
+    if (sourceConfig.sourceType === 'pull') {
+      await processPullSource({
+        sourceConfig,
+        vaultPath,
+        repoRoot,
+        state,
+        activeKeys,
+        result,
+        ingestedAt,
+      });
+      continue;
+    }
+
     const files = resolveSourceFiles(sourceConfig, repoRoot);
 
     for (const file of files) {
@@ -375,6 +778,24 @@ export async function syncWikiBridge(
       const slug = buildBridgeSlug(sourceConfig, file);
       const pageId = buildBridgePageId(slug);
       const pageRelativePath = buildBridgePagePath(slug);
+
+      // Phase 2.5: non-markdown files go through the extractor registry.
+      // Markdown stays on the legacy path so the default vault is unchanged.
+      if (!isMarkdownFile(file.relativePath)) {
+        await processExtractedAsset({
+          file,
+          vaultPath,
+          repoRoot,
+          syncKey,
+          slug,
+          pageId,
+          pageRelativePath,
+          state,
+          result,
+          ingestedAt,
+        });
+        continue;
+      }
 
       const renderFingerprint = computeRenderFingerprint({
         artifactKind: sourceConfig.kind,

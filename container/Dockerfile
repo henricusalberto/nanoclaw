@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
+    yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
 # Python packages used by OpenClaw workspace scripts (Fathom, finance, planning, etc.)
