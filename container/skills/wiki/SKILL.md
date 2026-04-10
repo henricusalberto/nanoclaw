@@ -159,6 +159,70 @@ The `wiki migrate-vault` subcommand is a one-shot upgrade path from the legacy `
 
 The migration snapshots a backup to `.openclaw-wiki/migration-backup/<timestamp>/` before moving anything. Recovery path: copy files back out, revert frontmatter edits, delete the migration-log entry.
 
+### Audit layer (Phase 5)
+
+Every wiki write goes through `writeWikiPage()`, which snapshots the prior state to `.openclaw-wiki/versions/<slug>/<unix-ms>.json` before overwriting. This means the wiki is now answerable across time:
+
+```bash
+# What edits has dom-ingleston seen?
+npx tsx src/wiki/cli.ts history --page dom-ingleston
+
+# Show the diff between two snapshots
+npx tsx src/wiki/cli.ts diff --page dom-ingleston --from <ts1> --to <ts2>
+
+# Restore a page to a prior version (creates a fresh snapshot first)
+npx tsx src/wiki/cli.ts revert --page dom-ingleston --ts <ts>
+```
+
+Pruning is automatic: keep the 50 most recent snapshots per page.
+
+### Graph traversal
+
+The compile pass builds an in-memory link graph from body wikilinks + typed `links:` frontmatter and caches it at `.openclaw-wiki/graph-index.json`. Use it instead of grepping when you need structural answers:
+
+```bash
+# Everything 2 hops from a node
+npx tsx src/wiki/cli.ts graph traverse --page dom-ingleston --depth 2
+
+# Inbound edges (backlinks)
+npx tsx src/wiki/cli.ts graph backlinks --page revive-plus-labs
+
+# Shortest path between two nodes
+npx tsx src/wiki/cli.ts graph path --from dom-ingleston --to klaviyo
+```
+
+Typed links are an optional additive frontmatter field on any page:
+
+```yaml
+links:
+  - type: works-with    # cites | mentions | contradicts | derives-from | works-with
+    target: company.acme
+    note: "introduced March 2026"
+```
+
+Filter traversals by relation type with `--type contradicts` (etc).
+
+### Fuzzy slug resolution
+
+When the user mentions a page by approximate name, prefer the resolver over grep:
+
+```bash
+npx tsx src/wiki/cli.ts slug resolve --name "Dom Inglston"
+# 0.706  dom-ingleston  (Dom Ingleston)
+```
+
+Trigram-Jaccard scoring against basenames + titles + aliases. Returns ranked candidates above min-score 0.2.
+
+### Volume metrics
+
+The compile pass logs metrics to `.openclaw-wiki/volume-metrics.jsonl` and writes a recommendation to `reports/volume.md`:
+
+```bash
+npx tsx src/wiki/cli.ts volume report
+```
+
+Levels: `OK` → `WATCH` → `RECOMMEND` → `BUILD NOW`. When the recommendation hits `BUILD NOW`, surface it to Maurizio — the vault is big enough that SQLite + FTS5 would meaningfully improve search latency. Until then, markdown-only is the right call.
+
 Every page has frontmatter with **OpenClaw schema**:
 
 ```yaml

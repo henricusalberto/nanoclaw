@@ -211,11 +211,56 @@ export function serializeWikiPage(
   return `---\n${yamlStr}\n---\n\n${body.replace(/^\n+/, '')}`;
 }
 
+/**
+ * Module-scoped hook for the Phase 5 versions module. Set via
+ * `setWriteWikiPageHook` so `markdown.ts` doesn't have to import
+ * `versions.ts` (which would form a dependency cycle). The wiki
+ * entry point installs the hook on first use.
+ */
+let writeWikiPageHook:
+  | ((params: {
+      filePath: string;
+      writtenBy?: string;
+      reason?: string;
+    }) => void)
+  | null = null;
+
+export function setWriteWikiPageHook(
+  hook:
+    | ((params: {
+        filePath: string;
+        writtenBy?: string;
+        reason?: string;
+      }) => void)
+    | null,
+): void {
+  writeWikiPageHook = hook;
+}
+
+export interface WriteWikiPageOptions {
+  /** Free-form actor label for the version snapshot ('janus', 'autofix', ...). */
+  writtenBy?: string;
+  /** Short reason for the change. */
+  reason?: string;
+}
+
 export function writeWikiPage(
   filePath: string,
   frontmatter: WikiPageFrontmatter,
   body: string,
+  opts: WriteWikiPageOptions = {},
 ): void {
+  if (writeWikiPageHook) {
+    try {
+      writeWikiPageHook({
+        filePath,
+        writtenBy: opts.writtenBy,
+        reason: opts.reason,
+      });
+    } catch {
+      // Snapshot failures must never block a real write.
+    }
+  }
   const content = serializeWikiPage(frontmatter, body);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.tmp`;

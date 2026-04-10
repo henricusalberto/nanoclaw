@@ -19,12 +19,11 @@
 
 import path from 'path';
 
-import { atomicWriteFile } from './fs-util.js';
 import {
   parseWikiPage,
-  serializeWikiPage,
   WikiClaim,
   WikiPageFrontmatter,
+  writeWikiPage,
 } from './markdown.js';
 import { renderSourceAttribution } from './source-attribution.js';
 import {
@@ -359,11 +358,12 @@ export async function runAutofix(
         changes: pageChanges,
       });
       if (opts.apply) {
-        const serialized = serializeWikiPage(
+        writeWikiPage(
+          page.filePath,
           fmModified ? newFm : page.frontmatter,
           newBody,
+          { writtenBy: 'autofix', reason: pageChanges.slice(0, 3).join('; ') },
         );
-        atomicWriteFile(page.filePath, serialized);
         result.pagesWritten++;
       }
     }

@@ -16,6 +16,14 @@ import { syncWikiBridge } from './bridge.js';
 import { compileWiki } from './compile.js';
 import { runDreamCycle } from './dream-cycle.js';
 import { runEntityScan } from './entity-scan.js';
+import {
+  computeBacklinks,
+  neighbors,
+  readGraphIndex,
+  shortestPath,
+  traverse,
+} from './graph.js';
+import { installWikiHooks } from './install-hooks.js';
 import { ExtractorInput } from './extractors/base.js';
 import { getDefaultRegistry } from './extractors/registry.js';
 import { lintWiki } from './lint.js';
@@ -23,6 +31,15 @@ import { serializeWikiPage, WikiPageFrontmatter } from './markdown.js';
 import { applyMigrationPlan, buildMigrationPlan } from './migrate-vault.js';
 import { vaultPaths } from './paths.js';
 import { resolveForVault } from './resolver.js';
+import { resolveSlug } from './slug-resolver.js';
+import { collectVaultPages } from './vault-walk.js';
+import {
+  diffVersions,
+  listVersions,
+  readVersion,
+  revertToVersion,
+} from './versions.js';
+import { classifyAll, readMetricsHistory } from './volume-checker.js';
 
 const DEFAULT_VAULT = 'groups/telegram_wiki-inbox/wiki';
 
@@ -88,6 +105,12 @@ const VALUE_FLAGS = new Set([
   '--title',
   '--type',
   '--hint',
+  '--page',
+  '--ts',
+  '--from',
+  '--to',
+  '--depth',
+  '--name',
 ]);
 
 async function main(): Promise<void> {
@@ -103,10 +126,19 @@ async function main(): Promise<void> {
     }
     positional.push(a);
   }
-  const vaultArg = positional[0];
+  // Some commands take a subcommand as their first positional rather
+  // than a vault path. For those, treat positional[0] as the subcommand
+  // and skip the vault arg entirely (always uses the default vault).
+  const SUBCOMMAND_HOSTS = new Set(['graph', 'slug', 'volume']);
+  const isSubcommandHost = SUBCOMMAND_HOSTS.has(cmd ?? '');
+  const vaultArg = isSubcommandHost ? undefined : positional[0];
   const vaultPath = path.resolve(vaultArg || DEFAULT_VAULT);
   const apply = flags.includes('--apply');
   const skipQuietHours = flags.includes('--morning');
+
+  // Phase 5: install the writeWikiPage version-snapshot hook so every
+  // CLI invocation that mutates a page accumulates audit history.
+  installWikiHooks({ vaultPath });
 
   switch (cmd) {
     case 'bridge':
@@ -218,6 +250,173 @@ async function main(): Promise<void> {
           console.log(`  ${err.path}: ${err.message}`);
         }
       }
+      return;
+    }
+    case 'history': {
+      const slug = getFlagValue(flags, args, '--page') ?? positional[1];
+      if (!slug) {
+        console.error('history requires --page <slug> (or as positional)');
+        process.exit(2);
+      }
+      const versions = listVersions(vaultPath, slug);
+      if (versions.length === 0) {
+        console.log(`No history for "${slug}"`);
+        return;
+      }
+      console.log(`History for ${slug} (newest first):`);
+      for (const v of versions) {
+        console.log(
+          `  ${v.ts}  ${v.isoTs}  ${v.writtenBy}${v.reason ? ` — ${v.reason}` : ''}`,
+        );
+      }
+      return;
+    }
+    case 'diff': {
+      const slug = getFlagValue(flags, args, '--page') ?? positional[1];
+      const fromTs = getFlagValue(flags, args, '--from');
+      const toTs = getFlagValue(flags, args, '--to');
+      if (!slug || !fromTs || !toTs) {
+        console.error('diff requires --page <slug> --from <ts> --to <ts>');
+        process.exit(2);
+      }
+      const a = readVersion(vaultPath, slug, parseInt(fromTs, 10));
+      const b = readVersion(vaultPath, slug, parseInt(toTs, 10));
+      if (!a || !b) {
+        console.error('one or both versions not found');
+        process.exit(2);
+      }
+      console.log(diffVersions(a, b));
+      return;
+    }
+    case 'revert': {
+      const slug = getFlagValue(flags, args, '--page') ?? positional[1];
+      const ts = getFlagValue(flags, args, '--ts');
+      if (!slug || !ts) {
+        console.error('revert requires --page <slug> --ts <ts>');
+        process.exit(2);
+      }
+      // Resolve the live page path. We try the current basename across
+      // every walked dir. Brittle but the migration script handles
+      // moves; this is the simple-vault path.
+      const pages = collectVaultPages(vaultPath);
+      const target = pages.find((p) => p.basename === slug.toLowerCase());
+      if (!target) {
+        console.error(`live page for slug "${slug}" not found in vault`);
+        process.exit(2);
+      }
+      const result = revertToVersion({
+        vaultPath,
+        pagePath: target.filePath,
+        slug,
+        ts: parseInt(ts, 10),
+        writtenBy: 'cli-revert',
+      });
+      console.log(`Reverted ${slug} to ${result.restored.isoTs}`);
+      console.log(`Pre-revert snapshot: ${result.preRevertSnapshot}`);
+      return;
+    }
+    case 'graph': {
+      // Subcommand: `wiki graph traverse --page X --depth N`
+      const sub = positional[0];
+      if (sub !== 'traverse' && sub !== 'backlinks' && sub !== 'path') {
+        console.error('graph subcommand: traverse | backlinks | path');
+        process.exit(2);
+      }
+      const graph = readGraphIndex(vaultPath);
+      if (sub === 'traverse') {
+        const slug = getFlagValue(flags, args, '--page');
+        const depth = parseInt(getFlagValue(flags, args, '--depth') ?? '2', 10);
+        if (!slug) {
+          console.error('graph traverse requires --page <slug>');
+          process.exit(2);
+        }
+        const r = traverse(graph, slug, { maxDepth: depth });
+        for (const node of r) {
+          console.log(`${'  '.repeat(node.depth)}${node.basename}`);
+        }
+        return;
+      }
+      if (sub === 'backlinks') {
+        const slug = getFlagValue(flags, args, '--page');
+        if (!slug) {
+          console.error('graph backlinks requires --page <slug>');
+          process.exit(2);
+        }
+        for (const b of computeBacklinks(graph, slug)) console.log(b);
+        return;
+      }
+      if (sub === 'path') {
+        const from = getFlagValue(flags, args, '--from');
+        const to = getFlagValue(flags, args, '--to');
+        if (!from || !to) {
+          console.error('graph path requires --from <slug> --to <slug>');
+          process.exit(2);
+        }
+        const p = shortestPath(graph, from, to);
+        if (!p) {
+          console.log(`(no path from ${from} to ${to})`);
+        } else {
+          console.log(p.join(' → '));
+          // Surface neighbour count for color so the user can sanity-check.
+          console.log(
+            `(${p.length - 1} hops via ${neighbors(graph, from).length} first-degree neighbours)`,
+          );
+        }
+        return;
+      }
+      return;
+    }
+    case 'slug': {
+      // `wiki slug resolve --name "Dom Inglston"`
+      const sub = positional[0];
+      if (sub !== 'resolve') {
+        console.error('slug subcommand: resolve');
+        process.exit(2);
+      }
+      const name = getFlagValue(flags, args, '--name');
+      if (!name) {
+        console.error('slug resolve requires --name <string>');
+        process.exit(2);
+      }
+      const pages = collectVaultPages(vaultPath).map((p) => ({
+        basename: p.basename,
+        title: p.frontmatter.title as string | undefined,
+      }));
+      const candidates = resolveSlug(name, pages);
+      if (candidates.length === 0) {
+        console.log('(no matches above minScore)');
+        return;
+      }
+      for (const c of candidates) {
+        console.log(
+          `  ${c.score.toFixed(3)}  ${c.basename}${c.label ? `  (${c.label})` : ''}`,
+        );
+      }
+      return;
+    }
+    case 'volume': {
+      const sub = positional[0] ?? 'report';
+      if (sub === 'report') {
+        const history = readMetricsHistory(vaultPath);
+        if (history.length === 0) {
+          console.log('No volume metrics yet — run `wiki compile` first.');
+          return;
+        }
+        const latest = history[history.length - 1];
+        const rec = classifyAll(latest);
+        console.log(`Volume level: ${rec.level}`);
+        console.log(rec.rationale);
+        console.log('');
+        for (const m of rec.metrics) {
+          console.log(`  ${m.name.padEnd(18)} ${m.value}  [${m.level}]`);
+        }
+        console.log(
+          `\nFull report: reports/volume.md  (history: ${history.length} samples)`,
+        );
+        return;
+      }
+      console.error('volume subcommand: report');
+      process.exit(2);
       return;
     }
     case 'extract': {
@@ -346,6 +545,10 @@ async function main(): Promise<void> {
       console.log(
         `  Timelines rewritten:  ${result.timelinePagesRewritten} (${result.timelineEntriesTotal} entries)`,
       );
+      console.log(
+        `  Graph:                ${result.graphNodes} nodes / ${result.graphEdges} edges`,
+      );
+      console.log(`  Volume level:         ${result.volumeLevel}`);
       console.log(`  Duration:             ${result.durationMs}ms`);
       return;
     }
@@ -406,6 +609,24 @@ async function main(): Promise<void> {
         '                    Run Phase 3 MECE migration (dry-run by default)',
       );
       console.log('  dream             Run the nightly dream cycle');
+      console.log('  history --page <slug>             List version history');
+      console.log(
+        '  diff --page <slug> --from <ts> --to <ts>  Diff two versions',
+      );
+      console.log(
+        '  revert --page <slug> --ts <ts>            Revert a page to a prior version',
+      );
+      console.log(
+        '  graph traverse --page <slug> [--depth N]   BFS from a node',
+      );
+      console.log('  graph backlinks --page <slug>              Inbound edges');
+      console.log('  graph path --from <slug> --to <slug>       Shortest path');
+      console.log(
+        '  slug resolve --name "<query>"     Trigram fuzzy slug match',
+      );
+      console.log(
+        '  volume report                     Volume metrics + recommendation',
+      );
       console.log('');
       console.log('Default vault: ' + DEFAULT_VAULT);
       return;

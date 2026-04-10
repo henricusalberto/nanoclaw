@@ -28,7 +28,9 @@ import {
   replaceManagedBlock,
   serializeWikiPage,
   WikiPageKind,
+  writeWikiPage,
 } from './markdown.js';
+import { buildGraph, writeGraphIndex } from './graph.js';
 import {
   computeRelatedBuckets,
   PageSummary,
@@ -37,6 +39,12 @@ import {
 } from './related.js';
 import { projectTimelines } from './timeline-projection.js';
 import { collectVaultPages, VAULT_DIRS as WALKED_DIRS } from './vault-walk.js';
+import {
+  appendMetricsSnapshot,
+  classifyAll,
+  VolumeMetrics,
+  writeVolumeReport,
+} from './volume-checker.js';
 
 // Compile walks VAULT_DIRS plus reports/ (which lint excludes to avoid
 // the circular "lint its own output" problem). Report pages still need
@@ -63,6 +71,10 @@ export interface CompileResult {
   /** Phase 4: compile-time managed-block projections. */
   timelinePagesRewritten: number;
   timelineEntriesTotal: number;
+  /** Phase 5: graph + volume checker outputs. */
+  graphNodes: number;
+  graphEdges: number;
+  volumeLevel: 'OK' | 'WATCH' | 'RECOMMEND' | 'BUILD NOW';
   durationMs: number;
 }
 
@@ -148,10 +160,10 @@ function refreshRelatedBlocks(
     );
     if (newBody === parsed.body) continue;
 
-    const newContent = serializeWikiPage(parsed.frontmatter, newBody);
-    const tempPath = `${page.filePath}.tmp`;
-    fs.writeFileSync(tempPath, newContent);
-    fs.renameSync(tempPath, page.filePath);
+    writeWikiPage(page.filePath, parsed.frontmatter, newBody, {
+      writtenBy: 'compile',
+      reason: 'related-block refresh',
+    });
     rewritten++;
   }
   return rewritten;
@@ -301,6 +313,36 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
   writeAgentDigest(vaultPath, digest);
   writeClaimsJsonl(vaultPath, buildClaimsJsonlLines(digestInputs));
 
+  // Phase 5: build the in-memory link graph and cache it under
+  // .openclaw-wiki/graph-index.json so CLI traversal commands don't
+  // pay the rebuild cost on every invocation.
+  const graph = buildGraph(timelineInputs);
+  writeGraphIndex(vaultPath, graph);
+  const graphNodes = Object.keys(graph.nodes).length;
+  let graphEdges = 0;
+  for (const arr of Object.values(graph.outEdges)) graphEdges += arr.length;
+
+  // Phase 5: volume metrics + recommendation. Pure measurement —
+  // never installs anything, just tells the user when the vault has
+  // grown big enough to warrant SQLite + FTS5.
+  const compileTimeMs = Date.now() - startedAt;
+  const bytesMarkdown = digestInputs.reduce(
+    (n, p) => n + (fs.statSync(p.filePath).size || 0),
+    0,
+  );
+  const metrics: VolumeMetrics = {
+    ts: new Date().toISOString(),
+    pageCount: summaries.length,
+    claimCount: digest.claimCount,
+    bytesMarkdown,
+    compileTimeMs,
+    lintTimeMs: lintResult.durationMs,
+    pagesAdded30d: 0, // populated from log events when we wire it
+  };
+  appendMetricsSnapshot(vaultPath, metrics);
+  const volumeRecommendation = classifyAll(metrics);
+  writeVolumeReport(vaultPath, metrics, volumeRecommendation);
+
   const result: CompileResult = {
     pageCount: summaries.length,
     rewrittenCount,
@@ -314,6 +356,9 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
     unlinkedMentions,
     timelinePagesRewritten: timelineResult.rewrittenCount,
     timelineEntriesTotal: timelineResult.entriesTotal,
+    graphNodes,
+    graphEdges,
+    volumeLevel: volumeRecommendation.level,
     durationMs: Date.now() - startedAt,
   };
 
