@@ -12,7 +12,9 @@ import fs from 'fs';
 import path from 'path';
 
 import { runAutofix } from './autofix.js';
+import { runBackfillHubs } from './backfill-hubs.js';
 import { syncWikiBridge } from './bridge.js';
+import { classifyBookmarks } from './classify-bookmarks.js';
 import { processCandidates } from './candidate-processor.js';
 import { compileWiki } from './compile.js';
 import { DEFAULT_DREAM_BUDGET_CONFIG } from './dream-budget.js';
@@ -599,6 +601,64 @@ async function main(): Promise<void> {
       ].join('\n');
       fs.writeFileSync(pageAbs, serializeWikiPage(frontmatter, body));
       console.log(`\nWrote source page: ${pageRel}`);
+      return;
+    }
+    case 'classify-bookmarks': {
+      console.log(
+        `Classifying X bookmarks (${apply ? 'APPLY' : 'DRY RUN'}): ${vaultPath}`,
+      );
+      const result = await classifyBookmarks(vaultPath, { apply });
+      console.log('\nClassify complete:');
+      console.log(`  Scanned:            ${result.scanned}`);
+      console.log(`  Already classified: ${result.alreadyClassified}`);
+      console.log(`  Newly classified:   ${result.classified}`);
+      console.log(`  Budget-blocked:     ${result.budgetBlocked}`);
+      console.log(`  LLM calls:          ${result.llmCalls}`);
+      console.log(`  Duration:           ${result.durationMs}ms`);
+      if (Object.keys(result.routedByHub).length > 0) {
+        console.log('\nRouted by hub:');
+        const hubs = Object.entries(result.routedByHub).sort(
+          (a, b) => b[1] - a[1],
+        );
+        for (const [hub, count] of hubs) {
+          console.log(`  ${hub.padEnd(14)} ${count}`);
+        }
+      }
+      if (result.errors.length > 0) {
+        console.log(`\nErrors: ${result.errors.length}`);
+        for (const e of result.errors.slice(0, 5)) {
+          console.log(`  ${e.file}: ${e.message}`);
+        }
+      }
+      if (!apply && result.classified > 0) {
+        console.log(
+          '\n[DRY RUN] No files modified. Re-run with --apply to write.',
+        );
+      }
+      return;
+    }
+    case 'backfill-hubs': {
+      const force = flags.includes('--force');
+      console.log(
+        `Backfilling hub assignments (${apply ? 'APPLY' : 'DRY RUN'}${force ? ', FORCE' : ''}): ${vaultPath}`,
+      );
+      const result = runBackfillHubs(vaultPath, { apply, force });
+      console.log('\nBackfill complete:');
+      console.log(`  Pages scanned:     ${result.scanned}`);
+      console.log(`  Already assigned:  ${result.alreadyAssigned}`);
+      console.log(`  Newly assigned:    ${result.newlyAssigned}`);
+      console.log(`  Skipped:           ${result.skipped}`);
+      console.log(`  Pages written:     ${result.pagesWritten}`);
+      console.log('\nAssignments by hub:');
+      const hubs = Object.entries(result.byHub).sort((a, b) => b[1] - a[1]);
+      for (const [hub, count] of hubs) {
+        console.log(`  ${hub.padEnd(14)} ${count}`);
+      }
+      if (!apply && result.newlyAssigned > 0) {
+        console.log(
+          '\n[DRY RUN] No files modified. Re-run with --apply to write.',
+        );
+      }
       return;
     }
     case 'autofix': {
