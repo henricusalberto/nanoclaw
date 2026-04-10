@@ -363,6 +363,24 @@ function mapEntityTypeToKind(entityType: string): string | undefined {
   return map[entityType];
 }
 
+/**
+ * Map candidate window ids back to the bridge source pages they came
+ * from so new/updated pages get proper `sourceIds[]` citations in
+ * frontmatter. Backfill windows are named `backfill:<basename>` which
+ * corresponds to the source page id `source.<basename>`. Live entity-
+ * scan windows (from Telegram conversation batching) don't map to a
+ * bridge source page and are left out.
+ */
+function deriveSourceIdsFromWindows(windowIds: string[]): string[] {
+  const ids = new Set<string>();
+  for (const wid of windowIds) {
+    if (wid.startsWith('backfill:')) {
+      ids.add(`source.${wid.slice('backfill:'.length)}`);
+    }
+  }
+  return Array.from(ids);
+}
+
 function appendClaimsToPage(
   vaultPath: string,
   page: VaultPageRecord,
@@ -386,8 +404,18 @@ function appendClaimsToPage(
     ],
     updatedAt: ts,
   }));
+  // Merge new source-id citations into whatever the page already has.
+  const existingSourceIds = new Set(
+    Array.isArray(page.frontmatter.sourceIds)
+      ? (page.frontmatter.sourceIds as string[])
+      : [],
+  );
+  for (const id of deriveSourceIdsFromWindows(group.sourceWindowIds)) {
+    existingSourceIds.add(id);
+  }
   const updatedFm: WikiPageFrontmatter = {
     ...page.frontmatter,
+    sourceIds: Array.from(existingSourceIds),
     claims: [...existing, ...newClaims],
     updatedAt: ts,
   };
@@ -436,7 +464,7 @@ function createStubPage(
       id: `${kind}.${basename}`,
       pageType: kind as never,
       title: group.name,
-      sourceIds: [],
+      sourceIds: deriveSourceIdsFromWindows(group.sourceWindowIds),
       claims: group.quotes.slice(0, 3).map((q, i) => ({
         id: `${basename}.auto-${datePart}-${i}`,
         text: q,
@@ -489,13 +517,15 @@ function saveOriginals(vaultPath: string, rows: EntityCandidate[]): number {
     const filePath = path.join(originalsDir, filename);
     if (fs.existsSync(filePath)) continue;
 
+    const windowId = row.window?.windowId;
+    const sourceIds = windowId ? deriveSourceIdsFromWindows([windowId]) : [];
     writeWikiPage(
       filePath,
       {
         id: `original.${datePart}-${slug}`,
         pageType: 'original',
         title: quote.slice(0, 60),
-        sourceIds: [],
+        sourceIds,
         claims: [],
         contradictions: [],
         questions: [],
