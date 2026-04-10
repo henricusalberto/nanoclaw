@@ -54,7 +54,7 @@ export interface TierPromptContext {
 
 export interface TierResult {
   tier: EnrichmentTier;
-  /** Proposed 3-sentence summary. */
+  /** Proposed 3-sentence summary (Tier 1) or compiled-truth paragraphs (Tier 2/3). */
   summary: string;
   /** Short claim sentences the LLM asserts are supported by the body. */
   proposedClaims: string[];
@@ -64,6 +64,10 @@ export interface TierResult {
   contradictions: string[];
   /** Research questions to pose back to the user. */
   questions: string[];
+  /** Tier 2/3 only: full markdown for the "Compiled truth" section. */
+  compiledTruth?: string;
+  /** Tier 3 only: deep dossier sections keyed by heading. */
+  dossier?: Record<string, string>;
 }
 
 const EMPTY_RESULT = (tier: EnrichmentTier): TierResult => ({
@@ -155,4 +159,184 @@ export async function runTier1(ctx: TierPromptContext): Promise<TierResult> {
     );
     return EMPTY_RESULT(1);
   }
+}
+
+// =============================================================================
+// Tier 2 — Sonnet. Opt-in via frontmatter `enrichmentTier: 2`.
+// =============================================================================
+
+const TIER2_PROMPT = `You are deeply enriching a single page in a personal wiki. You have more room than a quick-pass enricher: read the body carefully, the existing claims, and the neighbour list, then return a JSON object with exactly these fields:
+{
+  "summary": "4-6 sentence narrative summary in the user's voice, suitable for a Compiled Truth section",
+  "compiledTruth": "full markdown for a ## Compiled truth section — one to three short paragraphs that distill the page's current state of knowledge",
+  "proposedClaims": ["up to 6 factual claims supported by the body, each a complete sentence"],
+  "suggestedLinks": ["up to 8 basename strings from the neighbours list that this page should link to"],
+  "contradictions": ["internal contradictions or tensions between existing claims; empty array if none"],
+  "questions": ["up to 2 research questions worth posing back"]
+}
+Be conservative: never invent facts that aren't in the body. Contradictions are the most valuable output — flag anything ambiguous. Return ONLY the JSON object.`;
+
+const TIER2_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    compiledTruth: { type: 'string' },
+    proposedClaims: { type: 'array', items: { type: 'string' } },
+    suggestedLinks: { type: 'array', items: { type: 'string' } },
+    contradictions: { type: 'array', items: { type: 'string' } },
+    questions: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['summary', 'compiledTruth', 'proposedClaims'],
+};
+
+export async function runTier2(ctx: TierPromptContext): Promise<TierResult> {
+  const prompt = [
+    TIER2_PROMPT,
+    '',
+    `# Page: ${ctx.pageTitle} (${ctx.pageKind})`,
+    '',
+    '## Existing claims',
+    JSON.stringify(ctx.existingClaims, null, 2).slice(0, 4000),
+    '',
+    '## Body',
+    ctx.existingBody.slice(0, 16000),
+    '',
+    '## Neighbours',
+    ctx.neighbours
+      .slice(0, 40)
+      .map((n) => `- ${n.title} (${n.kind})`)
+      .join('\n'),
+  ].join('\n');
+
+  try {
+    const { json } = await callClaudeCli({
+      prompt,
+      model: TIER_MODEL[2] ?? 'claude-sonnet-4-5',
+      jsonSchema: TIER2_SCHEMA,
+      timeoutMs: 180_000,
+    });
+    const parsed = (json ?? {}) as Partial<TierResult>;
+    return {
+      tier: 2,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      compiledTruth:
+        typeof parsed.compiledTruth === 'string'
+          ? parsed.compiledTruth
+          : undefined,
+      proposedClaims: stringArray(parsed.proposedClaims),
+      suggestedLinks: stringArray(parsed.suggestedLinks),
+      contradictions: stringArray(parsed.contradictions),
+      questions: stringArray(parsed.questions),
+    };
+  } catch (err) {
+    logger.warn(
+      { err: String(err), page: ctx.pageTitle },
+      'dream-cycle: tier-2 call failed',
+    );
+    return EMPTY_RESULT(2);
+  }
+}
+
+// =============================================================================
+// Tier 3 — Opus, manual only via `wiki enrich --tier 3 <slug>`.
+// =============================================================================
+
+const TIER3_PROMPT = `You are writing a deep dossier for a single page in a personal wiki. Treat this as a research-grade synthesis pass: read the body, claims, and neighbours, then produce a JSON object with exactly these fields:
+{
+  "summary": "6-10 sentence executive summary",
+  "compiledTruth": "full markdown for a ## Compiled truth section — multiple paragraphs with headings as needed",
+  "dossier": {
+    "Background": "one or two paragraphs of context",
+    "Key facts": "bullet list or paragraphs of the most load-bearing facts",
+    "Timeline": "chronological narrative if applicable",
+    "Open questions": "unresolved tensions worth investigating",
+    "Recommended reading": "other pages in the neighbour list worth consulting"
+  },
+  "proposedClaims": ["up to 10 high-confidence factual claims, each a complete sentence with inline attribution where possible"],
+  "suggestedLinks": ["up to 12 basename strings from the neighbours list"],
+  "contradictions": ["every internal contradiction you can find; empty array if none"],
+  "questions": ["up to 5 research questions"]
+}
+Never invent facts. If the body is thin, say so explicitly in Background. Return ONLY the JSON object.`;
+
+const TIER3_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    compiledTruth: { type: 'string' },
+    dossier: {
+      type: 'object',
+      additionalProperties: { type: 'string' },
+    },
+    proposedClaims: { type: 'array', items: { type: 'string' } },
+    suggestedLinks: { type: 'array', items: { type: 'string' } },
+    contradictions: { type: 'array', items: { type: 'string' } },
+    questions: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['summary', 'compiledTruth', 'dossier', 'proposedClaims'],
+};
+
+export async function runTier3(ctx: TierPromptContext): Promise<TierResult> {
+  const prompt = [
+    TIER3_PROMPT,
+    '',
+    `# Page: ${ctx.pageTitle} (${ctx.pageKind})`,
+    '',
+    '## Existing claims',
+    JSON.stringify(ctx.existingClaims, null, 2).slice(0, 8000),
+    '',
+    '## Body',
+    ctx.existingBody.slice(0, 40000),
+    '',
+    '## Neighbours',
+    ctx.neighbours
+      .slice(0, 60)
+      .map((n) => `- ${n.title} (${n.kind})`)
+      .join('\n'),
+  ].join('\n');
+
+  try {
+    const { json } = await callClaudeCli({
+      prompt,
+      model: TIER_MODEL[3] ?? 'claude-opus-4-6',
+      jsonSchema: TIER3_SCHEMA,
+      timeoutMs: 300_000,
+    });
+    const parsed = (json ?? {}) as Partial<TierResult>;
+    const dossier =
+      parsed.dossier &&
+      typeof parsed.dossier === 'object' &&
+      !Array.isArray(parsed.dossier)
+        ? Object.fromEntries(
+            Object.entries(parsed.dossier).filter(
+              (e): e is [string, string] => typeof e[1] === 'string',
+            ),
+          )
+        : undefined;
+    return {
+      tier: 3,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      compiledTruth:
+        typeof parsed.compiledTruth === 'string'
+          ? parsed.compiledTruth
+          : undefined,
+      dossier,
+      proposedClaims: stringArray(parsed.proposedClaims),
+      suggestedLinks: stringArray(parsed.suggestedLinks),
+      contradictions: stringArray(parsed.contradictions),
+      questions: stringArray(parsed.questions),
+    };
+  } catch (err) {
+    logger.warn(
+      { err: String(err), page: ctx.pageTitle },
+      'dream-cycle: tier-3 call failed',
+    );
+    return EMPTY_RESULT(3);
+  }
+}
+
+function stringArray(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === 'string')
+    : [];
 }

@@ -31,7 +31,9 @@ import {
 import {
   enrichPages,
   EnrichmentRunResult,
+  runTier3Weekly,
   selectThinPages,
+  Tier3SweepResult,
 } from './enrichment.js';
 import { appendWikiLogEvent } from './log.js';
 import { collectVaultPages } from './vault-walk.js';
@@ -53,6 +55,7 @@ export interface DreamCycleResult {
   pagesScanned: number;
   candidates: ProcessCandidatesResult;
   enrichment: EnrichmentRunResult;
+  tier3Weekly?: Tier3SweepResult;
   compile?: CompileResult;
   reportPath: string;
   durationMs: number;
@@ -87,6 +90,18 @@ export async function runDreamCycle(
     now,
   });
 
+  // Step 3.5: weekly Tier 3 sweep — fires only on Sundays (day 0) so
+  // cost stays bounded. Pages opt in via `enrichmentTier: 3` frontmatter.
+  let tier3Weekly: Tier3SweepResult | undefined;
+  if (now.getDay() === 0) {
+    tier3Weekly = await runTier3Weekly({
+      vaultPath,
+      pages,
+      budget,
+      now,
+    });
+  }
+
   // Step 4: compile (unless skipped). Compile runs timeline projection,
   // refreshes the digest, and reruns lint.
   let compile: CompileResult | undefined;
@@ -114,6 +129,7 @@ export async function runDreamCycle(
       pages: pages.length,
       candidatesResult,
       enrichment,
+      tier3Weekly,
       compile,
     }),
   );
@@ -136,6 +152,7 @@ export async function runDreamCycle(
     pagesScanned: pages.length,
     candidates: candidatesResult,
     enrichment,
+    tier3Weekly,
     compile,
     reportPath,
     durationMs: Date.now() - startedAt,
@@ -147,6 +164,7 @@ function renderDreamReport(input: {
   pages: number;
   candidatesResult: ProcessCandidatesResult;
   enrichment: EnrichmentRunResult;
+  tier3Weekly?: Tier3SweepResult;
   compile?: CompileResult;
 }): string {
   const lines: string[] = [];
@@ -187,11 +205,26 @@ function renderDreamReport(input: {
   lines.push(
     `- Tier 1 proposals written: **${input.enrichment.tier1Written}** (of ${input.enrichment.tier1Attempted} attempted)`,
   );
+  lines.push(
+    `- Tier 2 written: **${input.enrichment.tier2Written}** (of ${input.enrichment.tier2Attempted})`,
+  );
   lines.push(`- Budget-blocked: ${input.enrichment.budgetBlocked}`);
   if (input.enrichment.errors.length > 0) {
     lines.push(`- Errors: ${input.enrichment.errors.length}`);
   }
   lines.push('');
+
+  if (input.tier3Weekly) {
+    lines.push('## Tier 3 — weekly dossier sweep');
+    lines.push('');
+    lines.push(
+      `- Attempted: ${input.tier3Weekly.attempted}, written: **${input.tier3Weekly.written}**, budget-blocked: ${input.tier3Weekly.budgetBlocked}`,
+    );
+    if (input.tier3Weekly.errors.length > 0) {
+      lines.push(`- Errors: ${input.tier3Weekly.errors.length}`);
+    }
+    lines.push('');
+  }
 
   if (input.compile) {
     lines.push('## Compile');
