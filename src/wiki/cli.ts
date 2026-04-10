@@ -15,7 +15,9 @@ import { runAutofix } from './autofix.js';
 import { syncWikiBridge } from './bridge.js';
 import { processCandidates } from './candidate-processor.js';
 import { compileWiki } from './compile.js';
+import { DEFAULT_DREAM_BUDGET_CONFIG } from './dream-budget.js';
 import { runDreamCycle } from './dream-cycle.js';
+import { enrichPageManually } from './enrichment.js';
 import { backfillEntityScanFromSources, runEntityScan } from './entity-scan.js';
 import {
   computeBacklinks,
@@ -30,6 +32,7 @@ import { getDefaultRegistry } from './extractors/registry.js';
 import { lintWiki } from './lint.js';
 import { serializeWikiPage, WikiPageFrontmatter } from './markdown.js';
 import { applyMigrationPlan, buildMigrationPlan } from './migrate-vault.js';
+import { invokeOperation, listOperations } from './operations.js';
 import { vaultPaths } from './paths.js';
 import { resolveForVault } from './resolver.js';
 import { resolveSlug } from './slug-resolver.js';
@@ -117,6 +120,8 @@ const VALUE_FLAGS = new Set([
   '--depth',
   '--name',
   '--min-mentions',
+  '--input',
+  '--tier',
 ]);
 
 async function main(): Promise<void> {
@@ -135,7 +140,7 @@ async function main(): Promise<void> {
   // Some commands take a subcommand as their first positional rather
   // than a vault path. For those, treat positional[0] as the subcommand
   // and skip the vault arg entirely (always uses the default vault).
-  const SUBCOMMAND_HOSTS = new Set(['graph', 'slug', 'volume']);
+  const SUBCOMMAND_HOSTS = new Set(['graph', 'slug', 'volume', 'op']);
   const isSubcommandHost = SUBCOMMAND_HOSTS.has(cmd ?? '');
   const vaultArg = isSubcommandHost ? undefined : positional[0];
   const vaultPath = path.resolve(vaultArg || DEFAULT_VAULT);
@@ -267,6 +272,39 @@ async function main(): Promise<void> {
           console.log(`  ${err.page}: ${err.message}`);
         }
       }
+      return;
+    }
+    case 'enrich': {
+      const slug = args.find(
+        (a, i) => i > 0 && !a.startsWith('--') && args[i - 1] !== '--tier',
+      );
+      if (!slug) {
+        console.error(
+          'enrich requires <slug>, e.g. `wiki enrich recharge-brand --tier 2`',
+        );
+        process.exit(2);
+      }
+      const tierStr = getFlagValue(flags, args, '--tier') ?? '2';
+      const tier = Number(tierStr);
+      if (tier !== 1 && tier !== 2 && tier !== 3) {
+        console.error('enrich --tier must be 1, 2, or 3');
+        process.exit(2);
+      }
+      console.log(`Enriching ${slug} at tier ${tier}...`);
+      const pages = collectVaultPages(vaultPath);
+      const result = await enrichPageManually({
+        vaultPath,
+        slug,
+        tier: tier as 1 | 2 | 3,
+        pages,
+        budget: DEFAULT_DREAM_BUDGET_CONFIG,
+        now: new Date(),
+      });
+      if (result.budgetBlocked) {
+        console.error(`Budget blocked: ${result.reason ?? 'unknown'}`);
+        process.exit(3);
+      }
+      console.log(`Shadow proposal written: ${result.proposedPath}`);
       return;
     }
     case 'resolve': {
@@ -644,6 +682,35 @@ async function main(): Promise<void> {
           if (count === 0) continue;
           console.log(`  ${code}: ${count}`);
         }
+      }
+      return;
+    }
+    case 'op': {
+      const opName = positional[0];
+      if (!opName || opName === 'list') {
+        const all = listOperations();
+        console.log('Available operations:');
+        for (const op of all) {
+          console.log(`  ${op.name.padEnd(16)} ${op.description}`);
+        }
+        return;
+      }
+      const inputJson = getFlagValue(flags, args, '--input') ?? '{}';
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(inputJson);
+      } catch (err) {
+        console.error(
+          `op: --input is not valid JSON: ${(err as Error).message}`,
+        );
+        process.exit(2);
+      }
+      try {
+        const result = await invokeOperation(vaultPath, opName, parsed);
+        console.log(JSON.stringify(result, null, 2));
+      } catch (err) {
+        console.error(`op ${opName} failed: ${(err as Error).message}`);
+        process.exit(3);
       }
       return;
     }
