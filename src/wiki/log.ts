@@ -43,11 +43,12 @@ export function appendWikiLogEvent(
   if (line.length > MAX_EVENT_BYTES) {
     // Truncate by replacing the data with a stub. Rare but defends against
     // torn writes when an event accidentally embeds a giant array.
-    line = JSON.stringify({
-      ts: event.ts,
-      type: event.type,
-      data: { _truncated: true, originalKeys: Object.keys(data) },
-    }) + '\n';
+    line =
+      JSON.stringify({
+        ts: event.ts,
+        type: event.type,
+        data: { _truncated: true, originalKeys: Object.keys(data) },
+      }) + '\n';
   }
   fs.appendFileSync(logPath, line);
 }

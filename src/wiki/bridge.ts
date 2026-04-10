@@ -317,8 +317,10 @@ function renderBridgeBody(params: {
 
   // Raw content. Use a fence longer than any run of backticks already
   // present in the source so embedded markdown fences don't escape ours.
-  const longestRun = (params.rawContent.match(/`+/g) || [])
-    .reduce((max, s) => Math.max(max, s.length), 0);
+  const longestRun = (params.rawContent.match(/`+/g) || []).reduce(
+    (max, s) => Math.max(max, s.length),
+    0,
+  );
   const fence = '`'.repeat(Math.max(3, longestRun + 1));
   lines.push('## Content\n');
   lines.push(`${fence}markdown`);

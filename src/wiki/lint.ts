@@ -21,6 +21,7 @@ import {
   WIKI_AGING_DAYS,
   WIKI_STALE_DAYS,
 } from './claim-health.js';
+import { readJsonOrDefault } from './fs-util.js';
 import { appendWikiLogEvent } from './log.js';
 import {
   extractWikiLinks,
@@ -31,6 +32,12 @@ import {
   WikiPageFrontmatter,
   WikiPageKind,
 } from './markdown.js';
+import { vaultPaths } from './paths.js';
+import {
+  claimHasSourceAttribution,
+  extractAllSourceAttributions,
+  SOURCE_ATTRIBUTION_RE,
+} from './source-attribution.js';
 
 const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
   { dir: 'entities', kind: 'entity' },
@@ -59,7 +66,11 @@ export type LintCheckCode =
   | 'claim-low-confidence'
   | 'claim-missing-evidence'
   | 'stale-page'
-  | 'stale-claim';
+  | 'stale-claim'
+  // Phase 1 — Audit Floor
+  | 'claim-missing-attribution'
+  | 'unlinked-entity-mention'
+  | 'timeline-missing-attribution';
 
 export interface LintIssue {
   code: LintCheckCode;
@@ -86,6 +97,109 @@ interface PageRecord {
   expectedKind: WikiPageKind;
   frontmatter: WikiPageFrontmatter;
   body: string;
+}
+
+// =============================================================================
+// Collision blocklist — words that happen to collide with page titles or
+// basenames but shouldn't trigger unlinked-entity-mention warnings.
+// Seeded on first run if missing.
+// =============================================================================
+
+const DEFAULT_COLLISION_BLOCKLIST: string[] = [
+  // Common English words that are also valid title-case tokens
+  'The',
+  'A',
+  'An',
+  'And',
+  'Or',
+  'But',
+  'If',
+  'Then',
+  'When',
+  'Where',
+  'What',
+  'Why',
+  'How',
+  'Who',
+  'With',
+  'Without',
+  'From',
+  'To',
+  'In',
+  'On',
+  'At',
+  'By',
+  'For',
+  'Of',
+  'As',
+  'Is',
+  'Was',
+  'Are',
+  'Were',
+  'Be',
+  'Been',
+  'Being',
+  'Have',
+  'Has',
+  'Had',
+  'Do',
+  'Does',
+  'Did',
+  'Will',
+  'Would',
+  'Could',
+  'Should',
+  'May',
+  'Might',
+  'Can',
+  'Cannot',
+  'Not',
+  'No',
+  'Yes',
+  'All',
+  'Any',
+  'Each',
+  'Every',
+  'Some',
+  'Most',
+  'More',
+  'Less',
+  'Very',
+  'Just',
+  'Only',
+  'Also',
+  'Even',
+  'Still',
+  'Yet',
+  'Now',
+  'Then',
+  'Here',
+  'There',
+  'Today',
+  'Yesterday',
+  'Tomorrow',
+  // NanoClaw-specific false positives
+  'Wiki',
+  'Source',
+  'Note',
+  'Goal',
+  'Status',
+  'Overview',
+  'Content',
+];
+
+function loadCollisionBlocklist(vaultPath: string): Set<string> {
+  const blocklistPath = path.join(
+    vaultPaths(vaultPath).stateDir,
+    'entity-collision-blocklist.json',
+  );
+  const data = readJsonOrDefault<{ blocklist: string[] }>(blocklistPath, {
+    blocklist: DEFAULT_COLLISION_BLOCKLIST,
+  });
+  const words = Array.isArray(data.blocklist)
+    ? data.blocklist
+    : DEFAULT_COLLISION_BLOCKLIST;
+  return new Set(words.map((w) => w.toLowerCase()));
 }
 
 // =============================================================================
@@ -354,6 +468,215 @@ function checkClaimConflicts(pages: PageRecord[]): LintIssue[] {
 }
 
 // =============================================================================
+// Phase 1: Source attribution checks
+// =============================================================================
+
+const ATTRIBUTION_REQUIRED_KINDS: ReadonlySet<WikiPageKind> =
+  new Set<WikiPageKind>([
+    'entity',
+    // Phase 3 will add person/company/business/deal/project here
+  ]);
+
+function checkClaimAttribution(page: PageRecord): LintIssue[] {
+  const issues: LintIssue[] = [];
+  if (page.kind === 'source' || page.kind === 'report') return issues;
+
+  const claims = Array.isArray(page.frontmatter.claims)
+    ? page.frontmatter.claims
+    : [];
+  if (claims.length === 0) return issues;
+
+  const severity: LintSeverity = ATTRIBUTION_REQUIRED_KINDS.has(
+    page.expectedKind,
+  )
+    ? 'error'
+    : 'warning';
+
+  for (const claim of claims) {
+    if (claimHasSourceAttribution(claim)) continue;
+    issues.push({
+      code: 'claim-missing-attribution',
+      severity,
+      pagePath: page.relativePath,
+      message: `claim "${claim.text.slice(0, 60)}..." has no parseable [Source: ...] attribution`,
+      context: { claimId: claim.id },
+    });
+  }
+  return issues;
+}
+
+/**
+ * Phase 5 stub: timeline-missing-attribution. Runs against the auto-
+ * generated `## Timeline` managed block body when Phase 5 ships. Until
+ * then, this check is a no-op (blocks don't exist yet).
+ */
+function checkTimelineAttribution(page: PageRecord): LintIssue[] {
+  const issues: LintIssue[] = [];
+  const TIMELINE_BLOCK_RE =
+    /<!--\s*openclaw:wiki:timeline:start\s*-->([\s\S]*?)<!--\s*openclaw:wiki:timeline:end\s*-->/;
+  const m = page.body.match(TIMELINE_BLOCK_RE);
+  if (!m) return issues;
+
+  const blockBody = m[1];
+  // Timeline entries are bullet lines: `- <date> [Source: ...] — text`
+  const lines = blockBody.split('\n').filter((l) => l.trim().startsWith('- '));
+  for (const line of lines) {
+    if (!SOURCE_ATTRIBUTION_RE.test(line)) {
+      issues.push({
+        code: 'timeline-missing-attribution',
+        severity: 'warning',
+        pagePath: page.relativePath,
+        message: `timeline entry has no [Source: ...] attribution: "${line.slice(0, 80)}..."`,
+      });
+    }
+  }
+  return issues;
+}
+
+// =============================================================================
+// Phase 1: Iron law of back-linking — unlinked-entity-mention
+// =============================================================================
+
+/**
+ * Strip regions of the body where entity mentions should NOT be detected:
+ *   - Frontmatter block (between the first two `---` lines)
+ *   - Fenced code blocks (```...```)
+ *   - Inline code (`...`)
+ *   - Existing [[wikilinks]] and [md](links)
+ *   - Any managed block `<!-- openclaw:wiki:*:start --> ... :end -->`
+ *   - HTML comments
+ *   - Line-start headings (to avoid matching page H1 as an "unlinked mention")
+ */
+function extractScannableProse(body: string): string {
+  let text = body;
+  // Frontmatter (if somehow present in body — shouldn't be after parseWikiPage)
+  text = text.replace(/^---\n[\s\S]*?\n---\n/, '');
+  // Fenced code blocks
+  text = text.replace(/```[\s\S]*?```/g, ' ');
+  text = text.replace(/~~~[\s\S]*?~~~/g, ' ');
+  // Any managed block
+  text = text.replace(
+    /<!--\s*openclaw:wiki:[a-z-]+:start\s*-->[\s\S]*?<!--\s*openclaw:wiki:[a-z-]+:end\s*-->/g,
+    ' ',
+  );
+  text = text.replace(
+    /<!--\s*openclaw:human:start\s*-->[\s\S]*?<!--\s*openclaw:human:end\s*-->/g,
+    ' ',
+  );
+  // HTML comments
+  text = text.replace(/<!--[\s\S]*?-->/g, ' ');
+  // Inline code
+  text = text.replace(/`[^`\n]+`/g, ' ');
+  // Wikilinks [[...]]
+  text = text.replace(/\[\[[^\]]+\]\]/g, ' ');
+  // Markdown links [text](url)
+  text = text.replace(/\[[^\]]*\]\([^)]+\)/g, ' ');
+  // Headings (entire lines starting with #)
+  text = text.replace(/^#{1,6}\s.*$/gm, ' ');
+  return text;
+}
+
+interface MentionCandidate {
+  /** The literal string found in body */
+  term: string;
+  /** The page id to link to */
+  targetPageId: string;
+  /** The page basename (for wikilink rendering) */
+  targetBasename: string;
+  /** The page title (for display) */
+  targetTitle: string;
+  /** Index into the cleaned body where the match starts */
+  index: number;
+}
+
+function findUnlinkedMentions(
+  page: PageRecord,
+  allPages: PageRecord[],
+  blocklist: Set<string>,
+): MentionCandidate[] {
+  const prose = extractScannableProse(page.body);
+  const candidates: MentionCandidate[] = [];
+
+  // Build a list of (term, page) pairs to search for. Use each page's
+  // title (length ≥4, excluding blocklist) AND each page's basename if
+  // it's multi-word or CamelCase.
+  const targets: { term: string; target: PageRecord }[] = [];
+  for (const target of allPages) {
+    if (target.filePath === page.filePath) continue;
+    const title = target.frontmatter.title || '';
+    if (title.length >= 4 && /^[A-Z]/.test(title)) {
+      // Only search for distinctive titles — skip blocklist members
+      if (!blocklist.has(title.toLowerCase())) {
+        targets.push({ term: title, target });
+      }
+    }
+    // Also search for the basename as a capitalized slug (e.g. "dom-ingleston"
+    // would match "Dom Ingleston" — already covered by title). Skip basename
+    // matching for now to avoid double-counting.
+  }
+
+  for (const { term, target } of targets) {
+    // Escape regex special chars in term
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Word-boundary match, case-sensitive (to preserve capitalization
+    // signal), global to find all occurrences
+    const re = new RegExp(`\\b${escaped}\\b`, 'g');
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(prose)) !== null) {
+      candidates.push({
+        term: m[0],
+        targetPageId: target.frontmatter.id || target.basename,
+        targetBasename: target.basename,
+        targetTitle: target.frontmatter.title || target.basename,
+        index: m.index,
+      });
+    }
+  }
+
+  // Deduplicate: one warning per (page, targetPageId) pair, not per occurrence.
+  const seen = new Set<string>();
+  const unique: MentionCandidate[] = [];
+  for (const c of candidates) {
+    if (seen.has(c.targetPageId)) continue;
+    seen.add(c.targetPageId);
+    unique.push(c);
+  }
+
+  return unique;
+}
+
+function checkUnlinkedMentions(
+  page: PageRecord,
+  allPages: PageRecord[],
+  blocklist: Set<string>,
+): LintIssue[] {
+  const issues: LintIssue[] = [];
+  if (page.kind === 'source' || page.kind === 'report') return issues;
+
+  // "One wikilink per target per page is enough." If the page already
+  // links to the target at least once, subsequent plain-text mentions
+  // are fine — Obsidian's backlinks panel and graph view surface them.
+  const existingLinks = new Set(extractWikiLinks(page.body));
+
+  const candidates = findUnlinkedMentions(page, allPages, blocklist);
+  for (const c of candidates) {
+    if (existingLinks.has(c.targetBasename)) continue;
+    issues.push({
+      code: 'unlinked-entity-mention',
+      severity: 'warning',
+      pagePath: page.relativePath,
+      message: `mentions "${c.term}" in prose but does not link to [[${c.targetBasename}]]`,
+      context: {
+        term: c.term,
+        targetPageId: c.targetPageId,
+        targetBasename: c.targetBasename,
+      },
+    });
+  }
+  return issues;
+}
+
+// =============================================================================
 // Report writer
 // =============================================================================
 
@@ -456,6 +779,7 @@ updatedAt: "${nowIso}"
 export async function lintWiki(vaultPath: string): Promise<LintResult> {
   const startedAt = Date.now();
   const pages = collectPages(vaultPath);
+  const collisionBlocklist = loadCollisionBlocklist(vaultPath);
 
   const pagesById = new Map<string, PageRecord>();
   const pagesByBasename = new Map<string, PageRecord>();
@@ -467,6 +791,10 @@ export async function lintWiki(vaultPath: string): Promise<LintResult> {
   const allIssues: LintIssue[] = [];
   for (const p of pages) {
     allIssues.push(...checkPage(p, pagesById, pagesByBasename));
+    // Phase 1 checks
+    allIssues.push(...checkClaimAttribution(p));
+    allIssues.push(...checkTimelineAttribution(p));
+    allIssues.push(...checkUnlinkedMentions(p, pages, collisionBlocklist));
   }
   allIssues.push(...checkDuplicateIds(pages));
   allIssues.push(...checkClaimConflicts(pages));

@@ -20,6 +20,7 @@ import {
   writeAgentDigest,
   writeClaimsJsonl,
 } from './digest.js';
+import { lintWiki } from './lint.js';
 import { appendWikiLogEvent } from './log.js';
 import {
   parseWikiPage,
@@ -51,6 +52,12 @@ export interface CompileResult {
   indexesRefreshed: number;
   digestPageCount: number;
   digestClaimCount: number;
+  /** Phase 1: lint counts surfaced for Janus via agent-digest */
+  lintIssueCount: number;
+  lintErrorCount: number;
+  lintWarningCount: number;
+  missingAttributions: number;
+  unlinkedMentions: number;
   durationMs: number;
 }
 
@@ -256,6 +263,29 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
   const digest = buildAgentDigest(digestInputs);
+
+  // Phase 1: run lint inline and fold its summary into the digest so Janus
+  // sees unlinked-mention and missing-attribution counts on every spawn
+  // without needing to re-run lint manually. The full lint report still
+  // lives at reports/lint.md.
+  const lintResult = await lintWiki(vaultPath);
+  const missingAttributions =
+    (lintResult.byCode['claim-missing-attribution'] || 0) +
+    (lintResult.byCode['timeline-missing-attribution'] || 0);
+  const unlinkedMentions = lintResult.byCode['unlinked-entity-mention'] || 0;
+
+  // Inject lint summary into the digest so the agent sees it alongside
+  // page counts and claim health. Using a loose cast since the OpenClaw
+  // AgentDigest type doesn't declare these additive fields — downstream
+  // readers that don't know about them just ignore the extras.
+  const digestWithLint = digest as unknown as Record<string, unknown>;
+  digestWithLint.lintSummary = {
+    issueCount: lintResult.issueCount,
+    errorCount: lintResult.bySeverity.error,
+    warningCount: lintResult.bySeverity.warning,
+    byCode: lintResult.byCode,
+  };
+
   writeAgentDigest(vaultPath, digest);
   writeClaimsJsonl(vaultPath, buildClaimsJsonlLines(digestInputs));
 
@@ -265,6 +295,11 @@ export async function compileWiki(vaultPath: string): Promise<CompileResult> {
     indexesRefreshed,
     digestPageCount: digest.pages.length,
     digestClaimCount: digest.claimCount,
+    lintIssueCount: lintResult.issueCount,
+    lintErrorCount: lintResult.bySeverity.error,
+    lintWarningCount: lintResult.bySeverity.warning,
+    missingAttributions,
+    unlinkedMentions,
     durationMs: Date.now() - startedAt,
   };
 
