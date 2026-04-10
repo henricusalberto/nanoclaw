@@ -13,6 +13,7 @@ import path from 'path';
 
 import { runAutofix } from './autofix.js';
 import { syncWikiBridge } from './bridge.js';
+import { processCandidates } from './candidate-processor.js';
 import { compileWiki } from './compile.js';
 import { runDreamCycle } from './dream-cycle.js';
 import { backfillEntityScanFromSources, runEntityScan } from './entity-scan.js';
@@ -217,6 +218,24 @@ async function main(): Promise<void> {
       console.log(`  Pages written:         ${result.written}`);
       console.log(`  Skipped (low conf):    ${result.skippedLowConfidence}`);
       console.log(`  Skipped (existing):    ${result.skippedExisting}`);
+      return;
+    }
+    case 'drain-candidates': {
+      console.log(`Draining entity candidates: ${vaultPath}`);
+      const result = await processCandidates(vaultPath);
+      console.log('\nCandidate drain complete:');
+      console.log(`  Scanned:            ${result.candidatesScanned}`);
+      console.log(`  Stage 1 blocked:    ${result.blocked}`);
+      console.log(`  Stage 1 merged:     ${result.merged}`);
+      console.log(`  Stage 1 promoted:   ${result.promoted}`);
+      console.log(`  Originals saved:    ${result.originalsSaved}`);
+      console.log(`  Stage 2 merged:     ${result.llmMerged}`);
+      console.log(`  Stage 2 promoted:   ${result.llmPromoted}`);
+      console.log(`  Stage 2 discarded:  ${result.llmDiscarded}`);
+      console.log(`  Sonnet calls:       ${result.llmCalls}`);
+      console.log(`  Budget-blocked:     ${result.llmBudgetBlocked}`);
+      console.log(`  Review queue size:  ${result.reviewQueueSize}`);
+      console.log(`  Duration:           ${result.durationMs}ms`);
       return;
     }
     case 'dream': {

@@ -19,6 +19,10 @@
 import fs from 'fs';
 import path from 'path';
 
+import {
+  processCandidates,
+  ProcessCandidatesResult,
+} from './candidate-processor.js';
 import { compileWiki, CompileResult } from './compile.js';
 import {
   DEFAULT_DREAM_BUDGET_CONFIG,
@@ -47,6 +51,7 @@ export interface DreamCycleOptions {
 export interface DreamCycleResult {
   date: string;
   pagesScanned: number;
+  candidates: ProcessCandidatesResult;
   enrichment: EnrichmentRunResult;
   compile?: CompileResult;
   reportPath: string;
@@ -61,10 +66,16 @@ export async function runDreamCycle(
   const now = opts.now ?? new Date();
   const budget = opts.budget ?? DEFAULT_DREAM_BUDGET_CONFIG;
 
-  // Step 1: pages
+  // Step 0: drain the entity-candidates queue. Rule pass (dedupe,
+  // merge, promote obvious) then Sonnet pass on the residue. Only
+  // genuinely ambiguous items survive into the review queue.
+  const candidatesResult = await processCandidates(vaultPath, { budget, now });
+
+  // Step 1: pages (re-walk AFTER the candidate pass since it may have
+  // created new stub pages that enrichment should see).
   const pages = collectVaultPages(vaultPath);
 
-  // Step 2: pick candidates
+  // Step 2: pick enrichment candidates (thin pages, low confidence)
   const candidates = selectThinPages(pages);
 
   // Step 3: enrichment
@@ -101,6 +112,7 @@ export async function runDreamCycle(
     renderDreamReport({
       dateStr,
       pages: pages.length,
+      candidatesResult,
       enrichment,
       compile,
     }),
@@ -108,7 +120,12 @@ export async function runDreamCycle(
 
   appendWikiLogEvent(vaultPath, 'compile', {
     phase: 'dream-cycle',
-    candidates: enrichment.candidates,
+    candidatesScanned: candidatesResult.candidatesScanned,
+    candidatesMerged: candidatesResult.merged + candidatesResult.llmMerged,
+    candidatesPromoted:
+      candidatesResult.promoted + candidatesResult.llmPromoted,
+    reviewQueueSize: candidatesResult.reviewQueueSize,
+    thinCandidates: enrichment.candidates,
     tier1Written: enrichment.tier1Written,
     budgetBlocked: enrichment.budgetBlocked,
     durationMs: Date.now() - startedAt,
@@ -117,6 +134,7 @@ export async function runDreamCycle(
   return {
     date: dateStr,
     pagesScanned: pages.length,
+    candidates: candidatesResult,
     enrichment,
     compile,
     reportPath,
@@ -127,6 +145,7 @@ export async function runDreamCycle(
 function renderDreamReport(input: {
   dateStr: string;
   pages: number;
+  candidatesResult: ProcessCandidatesResult;
   enrichment: EnrichmentRunResult;
   compile?: CompileResult;
 }): string {
@@ -145,6 +164,20 @@ function renderDreamReport(input: {
   lines.push('---');
   lines.push('');
   lines.push(`# Dream cycle — ${input.dateStr}`);
+  lines.push('');
+  lines.push('## Candidates');
+  lines.push('');
+  const c = input.candidatesResult;
+  lines.push(`- Scanned: **${c.candidatesScanned}**`);
+  lines.push(
+    `- Stage 1 deterministic: ${c.merged} merged, ${c.promoted} promoted, ${c.blocked} blocked, ${c.originalsSaved} originals saved`,
+  );
+  lines.push(
+    `- Stage 2 Sonnet: ${c.llmMerged} merged, ${c.llmPromoted} promoted, ${c.llmDiscarded} discarded, ${c.llmCalls} LLM calls`,
+  );
+  lines.push(
+    `- Awaiting human review: **${c.reviewQueueSize}** (see \`.openclaw-wiki/review-queue.jsonl\`; morning push will surface these)`,
+  );
   lines.push('');
   lines.push('## Summary');
   lines.push('');

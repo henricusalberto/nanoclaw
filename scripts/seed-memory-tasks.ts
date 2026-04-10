@@ -26,6 +26,7 @@ const ENTITY_SCAN_HOURLY_TASK_ID = 'wiki-entity-scan-hourly';
 const ENTITY_SCAN_MORNING_TASK_ID = 'wiki-entity-scan-morning';
 const BOOKMARK_SYNC_TASK_ID = 'wiki-bookmark-sync-daily';
 const DREAM_CYCLE_TASK_ID = 'wiki-dream-nightly';
+const REVIEW_MORNING_TASK_ID = 'wiki-review-morning';
 
 const SYNTHESIZE_CRON = '0 23 * * *';
 const ARCHIVE_CRON = '0 4 * * 0';
@@ -38,6 +39,10 @@ const ENTITY_SCAN_MORNING_CRON = '5 7 * * *';
 const BOOKMARK_SYNC_CRON = '0 6 * * *';
 // Phase 4: dream cycle — nightly enrichment + timeline refresh at 03:00 CET.
 const DREAM_CYCLE_CRON = '0 3 * * *';
+// Morning review push — wakes Janus if the candidate review queue has
+// items needing human judgment. Fires at 07:30 CET, after the dream
+// cycle has finished and before the user typically starts the day.
+const REVIEW_MORNING_CRON = '30 7 * * *';
 
 // In-container bash scripts for wiki crons. We use the PRE-COMPILED
 // `dist/wiki/cli.js` (produced by `npm run build` on the host) and
@@ -102,6 +107,33 @@ echo '{"wakeAgent": false}'`;
 
 const DREAM_CYCLE_PROMPT =
   'Run the nightly dream cycle (handled by script — agent should not be woken).';
+
+// Morning review cron: reads the review-queue.jsonl produced by the
+// dream cycle. If empty, exits silently (zero-noise morning). If
+// non-empty, wakes Janus with the queue contents as structured task
+// data so he can surface a single grouped question to the wiki-inbox
+// topic with proposed defaults.
+// Runs on the telegram_wiki-inbox group, which mounts the wiki-inbox
+// folder at /workspace/group (non-main groups don't get /workspace/wiki-inbox).
+const REVIEW_MORNING_SCRIPT = `#!/bin/bash
+set -e
+QUEUE=/workspace/group/wiki/.openclaw-wiki/review-queue.jsonl
+if [ ! -f "$QUEUE" ] || [ ! -s "$QUEUE" ]; then
+  echo '{"wakeAgent": false}'
+  exit 0
+fi
+COUNT=$(wc -l < "$QUEUE" | tr -d ' ')
+# Emit wakeAgent:true with a short pointer. Janus reads the full
+# review queue himself following the protocol in SKILL.md.
+printf '{"wakeAgent": true, "data": {"reviewQueueCount": %s, "reviewQueuePath": ".openclaw-wiki/review-queue.jsonl"}}\\n' "$COUNT"`;
+
+const REVIEW_MORNING_PROMPT = `The nightly dream cycle drained new entity candidates. Some were genuinely ambiguous and are waiting for your judgment in \`wiki/.openclaw-wiki/review-queue.jsonl\`.
+
+Read that file (one JSON object per line: name, proposedKind, mergeCandidates, snippets, sourceWindowIds, reason, llmNote). Group the questions by shape (spelling variants / maybe-promote / low-confidence new / tool-vs-product ambiguity), and send ONE compact Telegram message to this topic with the grouped questions and proposed defaults. Maurizio should be able to process 20-30 decisions in a single reply.
+
+When Maurizio replies, parse his decisions naturally, apply them (merge into existing pages, promote new stubs, discard, whatever he says), rewrite \`wiki/.openclaw-wiki/review-queue.jsonl\` with only deferred rows, and confirm briefly.
+
+If the review queue turns out to be empty (race with the cron), just say 'Nothing to review this morning.' and stop.`;
 
 const SYNTHESIZE_PROMPT = `Synthesize today's memory files into MEMORY.md.
 
@@ -240,6 +272,28 @@ function main(): void {
     script: DREAM_CYCLE_SCRIPT,
     cron: DREAM_CYCLE_CRON,
   });
+
+  // Morning review goes to the wiki-inbox group so the container has
+  // writable vault access and Janus's Telegram replies land in the
+  // right topic. Falls back to main if wiki-inbox isn't registered.
+  const wikiInboxEntry = Object.entries(groups).find(
+    ([, g]) => g.folder === 'telegram_wiki-inbox',
+  );
+  if (wikiInboxEntry) {
+    const [wikiChatJid, wikiGroup] = wikiInboxEntry;
+    upsertTask({
+      id: REVIEW_MORNING_TASK_ID,
+      groupFolder: wikiGroup.folder,
+      chatJid: wikiChatJid,
+      prompt: REVIEW_MORNING_PROMPT,
+      script: REVIEW_MORNING_SCRIPT,
+      cron: REVIEW_MORNING_CRON,
+    });
+  } else {
+    console.warn(
+      `Wiki inbox group not registered — skipping ${REVIEW_MORNING_TASK_ID}. Register telegram_wiki-inbox then re-run.`,
+    );
+  }
 
   console.log('Done. Memory tasks seeded.');
 }
