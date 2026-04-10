@@ -9,11 +9,11 @@
  * `wiki extract`.
  */
 
-import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
 import { ExtractedContent, Extractor, ExtractorInput } from './base.js';
+import { callClaudeCli } from './claude-cli.js';
 
 const IMAGE_EXTS = new Set([
   '.jpg',
@@ -90,75 +90,28 @@ interface VisionResult {
 }
 
 /**
- * Call `claude -p --bare --model claude-haiku-4-5 --image <path>` with
- * the extraction prompt. The claude CLI handles auth via OneCLI proxy
- * in-container. We swallow malformed JSON responses — graceful degradation.
+ * Delegate to the shared Claude CLI helper with an image attachment.
+ * On any failure (spawn/timeout/exit/unparseable JSON) we return an
+ * empty result — the caller still writes a source page pointing at
+ * the image, just without OCR metadata.
  */
 async function callClaudeVision(imagePath: string): Promise<VisionResult> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      '-p',
-      '--bare',
-      '--model',
-      'claude-haiku-4-5',
-      '--output-format',
-      'text',
-      '--image',
+  try {
+    const { json } = await callClaudeCli({
+      prompt: IMAGE_EXTRACTION_PROMPT,
+      model: 'claude-haiku-4-5',
+      timeoutMs: 90_000,
       imagePath,
-      '--dangerously-skip-permissions',
-      IMAGE_EXTRACTION_PROMPT,
-    ];
-
-    const child = spawn('claude', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
     });
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error('claude vision call timed out'));
-    }, 90_000);
-
-    child.stdout.on('data', (c: Buffer) => stdoutChunks.push(c));
-    child.stderr.on('data', (c: Buffer) => stderrChunks.push(c));
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(new Error(`claude CLI failed: ${err.message}`));
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(
-          new Error(
-            `claude exited ${code}: ${Buffer.concat(stderrChunks)
-              .toString('utf-8')
-              .slice(0, 500)}`,
-          ),
-        );
-        return;
-      }
-      const raw = Buffer.concat(stdoutChunks).toString('utf-8').trim();
-      try {
-        // Be forgiving — some models wrap JSON in fences even when told not to.
-        const cleaned = raw
-          .replace(/^```(?:json)?\n/, '')
-          .replace(/\n```$/, '');
-        const parsed = JSON.parse(cleaned) as VisionResult;
-        resolve({
-          caption: typeof parsed.caption === 'string' ? parsed.caption : '',
-          ocrText: typeof parsed.ocrText === 'string' ? parsed.ocrText : '',
-          entities: Array.isArray(parsed.entities)
-            ? parsed.entities.filter((e): e is string => typeof e === 'string')
-            : undefined,
-        });
-      } catch {
-        // Unparseable → empty result. Caller still writes a page.
-        resolve({ caption: '', ocrText: '' });
-      }
-    });
-  });
+    const parsed = (json ?? {}) as VisionResult;
+    return {
+      caption: typeof parsed.caption === 'string' ? parsed.caption : '',
+      ocrText: typeof parsed.ocrText === 'string' ? parsed.ocrText : '',
+      entities: Array.isArray(parsed.entities)
+        ? parsed.entities.filter((e): e is string => typeof e === 'string')
+        : undefined,
+    };
+  } catch {
+    return { caption: '', ocrText: '' };
+  }
 }

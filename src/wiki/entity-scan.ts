@@ -14,7 +14,6 @@
  * the budget ledger, and it never makes LLM calls during quiet hours.
  */
 
-import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -25,6 +24,7 @@ import {
   readBridgeConfig,
 } from './bridge-config.js';
 import { compactQueue, EntityQueueRow, readQueue } from './entity-queue.js';
+import { callClaudeCli } from './extractors/claude-cli.js';
 import { atomicWriteFile } from './fs-util.js';
 import { appendWikiLogEvent } from './log.js';
 import { vaultPaths } from './paths.js';
@@ -262,9 +262,10 @@ const EXTRACTION_JSON_SCHEMA = {
 };
 
 /**
- * Default LLM adapter: spawns `claude -p --model haiku --bare
- * --json-schema ... --output-format json` and parses stdout. Runs with a
- * 60s timeout. Any failure returns an empty extraction (safe default).
+ * Default LLM adapter. Delegates to the shared `callClaudeCli` helper
+ * so the argv + timeout + error shape lives in one place. Any failure
+ * (timeout, non-zero exit, unparseable stdout) collapses to an empty
+ * extraction — entity-scan never retries.
  */
 export class ClaudeCliAdapter implements LlmAdapter {
   constructor(
@@ -273,57 +274,23 @@ export class ClaudeCliAdapter implements LlmAdapter {
   ) {}
 
   async extract(windowText: string): Promise<LlmExtractionResult> {
-    const prompt = ENTITY_EXTRACTION_PROMPT + windowText;
-    return new Promise<LlmExtractionResult>((resolve) => {
-      const child = spawn(
-        'claude',
-        [
-          '-p',
-          '--bare',
-          '--model',
-          this.model,
-          '--output-format',
-          'text',
-          '--json-schema',
-          JSON.stringify(EXTRACTION_JSON_SCHEMA),
-          '--dangerously-skip-permissions',
-          prompt,
-        ],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
-      );
-      let stdout = '';
-      let stderr = '';
-      const timer = setTimeout(() => {
-        child.kill('SIGKILL');
-      }, this.timeoutMs);
-      child.stdout.on('data', (d) => (stdout += d.toString()));
-      child.stderr.on('data', (d) => (stderr += d.toString()));
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (code !== 0) {
-          logger.warn(
-            { code, stderr: stderr.slice(0, 400) },
-            'entity-scan: claude CLI non-zero exit',
-          );
-          resolve({ entities: [], originals: [] });
-          return;
-        }
-        try {
-          const parsed = JSON.parse(stdout) as LlmExtractionResult;
-          resolve({
-            entities: Array.isArray(parsed.entities) ? parsed.entities : [],
-            originals: Array.isArray(parsed.originals) ? parsed.originals : [],
-            ...(parsed.skipReason && { skipReason: parsed.skipReason }),
-          });
-        } catch (err) {
-          logger.warn(
-            { err: String(err), stdout: stdout.slice(0, 400) },
-            'entity-scan: claude CLI output not valid JSON',
-          );
-          resolve({ entities: [], originals: [] });
-        }
+    try {
+      const { json } = await callClaudeCli({
+        prompt: ENTITY_EXTRACTION_PROMPT + windowText,
+        model: this.model,
+        timeoutMs: this.timeoutMs,
+        jsonSchema: EXTRACTION_JSON_SCHEMA,
       });
-    });
+      const parsed = (json ?? {}) as LlmExtractionResult;
+      return {
+        entities: Array.isArray(parsed.entities) ? parsed.entities : [],
+        originals: Array.isArray(parsed.originals) ? parsed.originals : [],
+        ...(parsed.skipReason && { skipReason: parsed.skipReason }),
+      };
+    } catch (err) {
+      logger.warn({ err: String(err) }, 'entity-scan: claude CLI call failed');
+      return { entities: [], originals: [] };
+    }
   }
 }
 
@@ -492,12 +459,7 @@ export async function runEntityScan(
     );
     if (!check.allowed) {
       result.windowsSkippedBudget++;
-      markBlocked(
-        vaultPath,
-        check.reason ?? 'budget exhausted',
-        now,
-        cfg.quietHoursTz,
-      );
+      markBlocked(vaultPath, check.reason ?? 'budget exhausted', check.state);
       // Put the window's rows back on the open list so tomorrow picks
       // them up when the ledger resets.
       open.push(...window.rows);
@@ -516,7 +478,7 @@ export async function runEntityScan(
       extraction = { entities: [], originals: [] };
     }
 
-    recordSpend(vaultPath, est, now, cfg.quietHoursTz);
+    recordSpend(vaultPath, est, check.state, now, cfg.quietHoursTz);
     result.llmCalls++;
     result.usdSpent += est;
     result.windowsProcessed++;

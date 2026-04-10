@@ -45,15 +45,26 @@ function localDateString(now: Date, tz: string): string {
   return fmt.format(now); // "YYYY-MM-DD"
 }
 
+// Hoisted sentinel so `readBudget` doesn't allocate a fresh fallback
+// object on every call. readJsonOrDefault returns this directly when
+// the file is missing; we then check the date and allocate a fresh
+// zeroed state only when needed.
+const EMPTY_BUDGET: ScanBudgetState = {
+  date: '1970-01-01',
+  spentUsd: 0,
+  calls: 0,
+};
+
 export function readBudget(
   vaultPath: string,
   now: Date,
   tz: string,
 ): ScanBudgetState {
-  const file = budgetPath(vaultPath);
   const today = localDateString(now, tz);
-  const fallback: ScanBudgetState = { date: today, spentUsd: 0, calls: 0 };
-  const state = readJsonOrDefault<ScanBudgetState>(file, fallback);
+  const state = readJsonOrDefault<ScanBudgetState>(
+    budgetPath(vaultPath),
+    EMPTY_BUDGET,
+  );
   if (state.date !== today) {
     return { date: today, spentUsd: 0, calls: 0 };
   }
@@ -100,42 +111,39 @@ export function checkBudget(
 }
 
 /**
- * Atomically charge `usd` against today's ledger and bump the call counter.
- * If the date rolled over between the last read and this write, starts a
- * fresh ledger.
+ * Atomically charge `usd` against the ledger and bump the call counter.
+ * Callers pass the `baseState` they already read (via `checkBudget` or
+ * `readBudget`) so we don't re-read the same file twice per LLM call.
+ * If the date rolled over between the read and this write, we start
+ * a fresh ledger anchored to `now`.
  */
 export function recordSpend(
   vaultPath: string,
   usd: number,
+  baseState: ScanBudgetState,
   now: Date,
   tz: string,
 ): ScanBudgetState {
   const today = localDateString(now, tz);
-  const file = budgetPath(vaultPath);
-  const existing = readJsonOrDefault<ScanBudgetState>(file, {
-    date: today,
-    spentUsd: 0,
-    calls: 0,
-  });
   const base: ScanBudgetState =
-    existing.date === today ? existing : { date: today, spentUsd: 0, calls: 0 };
+    baseState.date === today
+      ? baseState
+      : { date: today, spentUsd: 0, calls: 0 };
   const next: ScanBudgetState = {
     date: today,
     spentUsd: base.spentUsd + usd,
     calls: base.calls + 1,
   };
-  atomicWriteFile(file, JSON.stringify(next, null, 2) + '\n');
+  atomicWriteFile(budgetPath(vaultPath), JSON.stringify(next, null, 2) + '\n');
   return next;
 }
 
 export function markBlocked(
   vaultPath: string,
   reason: string,
-  now: Date,
-  tz: string,
+  baseState: ScanBudgetState,
 ): void {
-  const state = readBudget(vaultPath, now, tz);
-  const next: ScanBudgetState = { ...state, blocked: reason };
+  const next: ScanBudgetState = { ...baseState, blocked: reason };
   atomicWriteFile(budgetPath(vaultPath), JSON.stringify(next, null, 2) + '\n');
 }
 

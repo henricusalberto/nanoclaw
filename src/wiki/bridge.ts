@@ -27,7 +27,11 @@ import {
 } from './bridge-state.js';
 import { compileWiki } from './compile.js';
 import { deriveConceptTags } from './concept-tags.js';
-import { ExtractedContent } from './extractors/base.js';
+import {
+  buildReferenceOnlyContent,
+  ExtractedContent,
+  ExtractorInput,
+} from './extractors/base.js';
 import {
   FieldtheoryBookmarkSummary,
   listFieldtheoryBookmarks,
@@ -476,71 +480,96 @@ function syntheticResolvedFileForBookmark(params: {
   };
 }
 
-async function processExtractedAsset(params: {
+/**
+ * Single unified writer for any extracted source page — used by both
+ * the file-glob path (PDFs, images, etc.) and pull sources (fieldtheory).
+ *
+ * Routes the extractor ONCE, reuses the matched instance for both the
+ * fingerprint and the extract call, catches extractor throws and falls
+ * back to a reference-only stub. Writes atomically, mutates `state` +
+ * `result` in place, records log entries.
+ */
+async function writeExtractedSourcePage(params: {
   file: ResolvedSourceFile;
-  vaultPath: string;
-  repoRoot: string;
-  syncKey: string;
-  slug: string;
+  input: ExtractorInput;
   pageId: string;
   pageRelativePath: string;
+  syncKey: string;
+  vaultPath: string;
+  repoRoot: string;
   state: ReturnType<typeof readSourceSyncState>;
   result: BridgeSyncResult;
   ingestedAt: string;
+  /** Anything to merge into the extracted frontmatter (e.g., ft metadata). */
+  frontmatterExtras?: Record<string, unknown>;
+  /** Overrides the default `` `relativePath` `` citation in the body. */
+  originalReference?: string;
 }): Promise<void> {
   const {
     file,
-    vaultPath,
-    repoRoot,
-    syncKey,
+    input,
     pageId,
     pageRelativePath,
+    syncKey,
+    vaultPath,
+    repoRoot,
     state,
     result,
     ingestedAt,
+    frontmatterExtras,
+    originalReference,
   } = params;
 
-  // Mirror the legacy fingerprint but add the extractor identity so that
-  // bumping an extractor version forces re-extraction of every page it
-  // produced. We don't know the exact extractor until after routing, but
-  // the registry is stable across a process so we can look it up cheaply.
+  // Route ONCE. Previously the bridge routed twice: once for the
+  // fingerprint and once inside `registry.extract`. We keep the
+  // extractor reference and call `.extract()` directly so the second
+  // walk disappears.
   const registry = getDefaultRegistry();
-  const extractor = registry.route({
-    kind: 'file',
-    path: file.absolutePath,
-  });
+  const extractor = registry.route(input);
 
   const renderFingerprint = computeRenderFingerprint({
     artifactKind: file.sourceConfig.kind,
     sourceRelativePath: file.relativePath,
     agentIds: file.sourceConfig.agentIds || [],
     templateVersion: TEMPLATE_VERSION,
-    extractorName: extractor?.name ?? 'reference-only',
-    extractorVersion: extractor?.version ?? '1',
+    extractor: extractor
+      ? { name: extractor.name, version: extractor.version }
+      : { name: 'reference-only', version: '1' },
   });
 
-  const skip = shouldSkipImportedSourceWrite({
-    vaultPath,
-    state,
-    syncKey,
-    expectedPagePath: pageRelativePath,
-    sourcePath: file.absolutePath,
-    sourceUpdatedAtMs: file.mtimeMs,
-    sourceSize: file.size,
-    renderFingerprint,
-  });
-
-  if (skip) {
+  if (
+    shouldSkipImportedSourceWrite({
+      vaultPath,
+      state,
+      syncKey,
+      expectedPagePath: pageRelativePath,
+      sourcePath: file.absolutePath,
+      sourceUpdatedAtMs: file.mtimeMs,
+      sourceSize: file.size,
+      renderFingerprint,
+    })
+  ) {
     result.skippedCount++;
     return;
   }
 
-  // Run the extractor. registry.extract() NEVER throws — it catches and
-  // converts failures into reference-only stub content.
-  const content = await registry.extract({
-    kind: 'file',
-    path: file.absolutePath,
-  });
+  let content: ExtractedContent;
+  if (!extractor) {
+    content = buildReferenceOnlyContent({
+      input,
+      reason: 'no extractor matched input',
+    });
+  } else {
+    try {
+      content = await extractor.extract(input);
+    } catch (err) {
+      content = buildReferenceOnlyContent({
+        input,
+        reason: (err as Error).message ?? 'extractor threw',
+        attemptedExtractor: extractor.name,
+      });
+    }
+  }
 
   const frontmatter = buildExtractedFrontmatter({
     pageId,
@@ -549,9 +578,11 @@ async function processExtractedAsset(params: {
     ingestedAt,
     repoRoot,
   });
+  if (frontmatterExtras) Object.assign(frontmatter, frontmatterExtras);
+
   const body = renderExtractedBody({
     content,
-    originalReference: `\`${file.relativePath}\``,
+    originalReference: originalReference ?? `\`${file.relativePath}\``,
   });
   const pageContent = serializeWikiPage(frontmatter, body);
 
@@ -582,6 +613,32 @@ async function processExtractedAsset(params: {
   if (wasNew) result.importedCount++;
   else result.updatedCount++;
   result.changedSourceIds.push(pageId);
+}
+
+async function processExtractedAsset(params: {
+  file: ResolvedSourceFile;
+  vaultPath: string;
+  repoRoot: string;
+  syncKey: string;
+  slug: string;
+  pageId: string;
+  pageRelativePath: string;
+  state: ReturnType<typeof readSourceSyncState>;
+  result: BridgeSyncResult;
+  ingestedAt: string;
+}): Promise<void> {
+  return writeExtractedSourcePage({
+    file: params.file,
+    input: { kind: 'file', path: params.file.absolutePath },
+    pageId: params.pageId,
+    pageRelativePath: params.pageRelativePath,
+    syncKey: params.syncKey,
+    vaultPath: params.vaultPath,
+    repoRoot: params.repoRoot,
+    state: params.state,
+    result: params.result,
+    ingestedAt: params.ingestedAt,
+  });
 }
 
 async function processPullSource(params: {
@@ -629,7 +686,6 @@ async function processPullSource(params: {
     return;
   }
 
-  const registry = getDefaultRegistry();
   const ingestedAtMs = Date.now();
 
   for (const bookmark of bookmarks) {
@@ -646,77 +702,29 @@ async function processPullSource(params: {
     const pageId = buildBridgePageId(slug);
     const pageRelativePath = buildBridgePagePath(slug);
 
-    // Pull items are cheap: skip if we've already written this bookmark's
-    // page and the extractor version hasn't bumped.
-    const renderFingerprint = computeRenderFingerprint({
-      artifactKind: sourceConfig.kind,
-      sourceRelativePath: virtualFile.relativePath,
-      agentIds: sourceConfig.agentIds || [],
-      templateVersion: TEMPLATE_VERSION,
-      extractorName: 'fieldtheory',
-      extractorVersion: '1',
-    });
-    const existing = state.entries[syncKey];
-    if (
-      existing &&
-      existing.renderFingerprint === renderFingerprint &&
-      fs.existsSync(path.join(vaultPath, existing.pagePath))
-    ) {
-      result.skippedCount++;
-      continue;
-    }
+    // ft-specific frontmatter extras so Phase 3 hub routing can read
+    // category/domain/author off the page.
+    const extras: Record<string, unknown> = {};
+    if (bookmark.category) extras.ftCategory = bookmark.category;
+    if (bookmark.domain) extras.ftDomain = bookmark.domain;
+    if (bookmark.author) extras.ftAuthor = bookmark.author;
 
-    const content = await registry.extract({
-      kind: 'bookmark-id',
-      bookmarkId: `ft:${bookmark.id}`,
-    });
-    const frontmatter = buildExtractedFrontmatter({
-      pageId,
+    await writeExtractedSourcePage({
       file: virtualFile,
-      content,
-      ingestedAt,
+      input: { kind: 'bookmark-id', bookmarkId: `ft:${bookmark.id}` },
+      pageId,
+      pageRelativePath,
+      syncKey,
+      vaultPath,
       repoRoot,
-    });
-    // Mix the pre-classified ft category/domain into frontmatter so
-    // Phase 3 hub routing can read them off the page.
-    if (bookmark.category) frontmatter.ftCategory = bookmark.category;
-    if (bookmark.domain) frontmatter.ftDomain = bookmark.domain;
-    if (bookmark.author) frontmatter.ftAuthor = bookmark.author;
-
-    const body = renderExtractedBody({
-      content,
+      state,
+      result,
+      ingestedAt,
+      frontmatterExtras: extras,
       originalReference: bookmark.url
         ? `[${bookmark.url}](${bookmark.url})`
         : '(no url)',
     });
-    const pageContent = serializeWikiPage(frontmatter, body);
-
-    const fullPagePath = path.join(vaultPath, pageRelativePath);
-    const wasNew = !fs.existsSync(fullPagePath);
-    try {
-      atomicWriteFile(fullPagePath, pageContent);
-    } catch (err) {
-      result.errorCount++;
-      result.errors.push({
-        path: pageRelativePath,
-        op: 'write-pull-page',
-        message: (err as Error).message,
-      });
-      continue;
-    }
-
-    state.entries[syncKey] = {
-      group: 'bridge',
-      pagePath: pageRelativePath,
-      sourcePath: virtualFile.absolutePath,
-      sourceUpdatedAtMs: ingestedAtMs,
-      sourceSize: 0,
-      renderFingerprint,
-    };
-
-    if (wasNew) result.importedCount++;
-    else result.updatedCount++;
-    result.changedSourceIds.push(pageId);
   }
 
   // Advance the pull cursor so the next run starts from ingestedAt.

@@ -38,7 +38,10 @@ export interface SourceAttribution {
  * `[Source: who, context, date]` with the same regex.
  */
 export const SOURCE_ATTRIBUTION_RE = /\[Source:\s*([^\]]+?)\s*\]/;
-export const SOURCE_ATTRIBUTION_RE_GLOBAL = /\[Source:\s*([^\]]+?)\s*\]/g;
+// Global variant reused by extractAllSourceAttributions so each call
+// gets a fresh iterator — we can't use SOURCE_ATTRIBUTION_RE directly
+// because it's shared and has no /g flag.
+const SOURCE_ATTRIBUTION_RE_SOURCE = SOURCE_ATTRIBUTION_RE.source;
 
 const DATE_RE =
   /^(\d{4}-\d{2}-\d{2})(?:\s+(\d{1,2}:\d{2}))?(?:\s+([A-Z]{2,5}))?$/;
@@ -104,7 +107,7 @@ export function extractAllSourceAttributions(
   text: string,
 ): SourceAttribution[] {
   const results: SourceAttribution[] = [];
-  const re = new RegExp(SOURCE_ATTRIBUTION_RE.source, 'g');
+  const re = new RegExp(SOURCE_ATTRIBUTION_RE_SOURCE, 'g');
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const parsed = parseAttributionInner(m[1]);
@@ -152,27 +155,6 @@ export function evidenceHasSourceAttribution(
   // the bridge source page's frontmatter has full provenance. Callers verify
   // sourceId resolution separately.
   return false;
-}
-
-/**
- * Best-effort: build a source attribution from an evidence entry that has
- * sourceId + updatedAt but no inline [Source: ...]. Used by autofix to
- * backfill attributions from resolved bridge source pages.
- */
-export function buildAttributionFromEvidence(
-  evidence: WikiClaimEvidence,
-  resolvedSource: { title: string; who?: string; date?: string } | null,
-): SourceAttribution | null {
-  if (!resolvedSource) return null;
-  const date =
-    resolvedSource.date ||
-    (evidence.updatedAt ? evidence.updatedAt.slice(0, 10) : undefined);
-  if (!date) return null;
-  return {
-    who: resolvedSource.who || resolvedSource.title,
-    context: evidence.note || resolvedSource.title,
-    date,
-  };
 }
 
 /**

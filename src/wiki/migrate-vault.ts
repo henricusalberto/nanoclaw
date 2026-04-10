@@ -31,6 +31,7 @@ import {
   resolve as resolvePage,
   ResolverDecision,
 } from './resolver.js';
+import { collectVaultPages } from './vault-walk.js';
 
 export interface MigrationPlanEntry {
   currentPath: string; // vault-relative
@@ -59,31 +60,9 @@ export interface MigrationResult {
   durationMs: number;
 }
 
-/**
- * Directories the migration walks. Deliberately includes `entities/`
- * and the vault root (via empty string) but NOT `sources/` — source
- * pages come from the bridge, moving them would desync bridge-state.
- */
-const WALKABLE_DIRS = [
-  '', // vault root (loose files like inbox.md)
-  'entities',
-  'concepts',
-  'syntheses',
-  'originals',
-  'people',
-  'companies',
-  'meetings',
-  'deals',
-  'projects',
-  'ideas',
-  'writing',
-  'personal',
-  'household',
-  'inbox',
-];
-
-// Files at the vault root that must never be migrated — these are
-// human-authored indexes and conventions, not content pages.
+// Human-authored top-level files the migration must never touch.
+// `index.md` across any subdirectory is compile-generated and also
+// filtered out by the shared walker.
 const ROOT_PROTECTED = new Set([
   'index.md',
   'log.md',
@@ -91,90 +70,73 @@ const ROOT_PROTECTED = new Set([
   'AGENTS.md',
   'README.md',
   'RESOLVER.md',
+  '_ingest-plan.md',
 ]);
-
-// `index.md` inside any subdirectory is compile-generated; never migrate.
-function isProtectedFile(relPath: string): boolean {
-  if (path.basename(relPath) === 'index.md') return true;
-  const dir = path.dirname(relPath);
-  if (dir === '.' && ROOT_PROTECTED.has(path.basename(relPath))) return true;
-  return false;
-}
 
 /**
  * Walk the vault and build a migration plan. No I/O beyond reads — the
  * plan can be printed, reviewed, and re-computed safely any number of
- * times.
+ * times. Sources/ is intentionally excluded: source pages are owned by
+ * the bridge and moving them would desync bridge-state.
  */
 export function buildMigrationPlan(vaultPath: string): MigrationPlan {
   const config = readResolverConfig(vaultPath);
   const entries: MigrationPlanEntry[] = [];
 
-  for (const dir of WALKABLE_DIRS) {
-    const abs = path.join(vaultPath, dir);
-    if (!fs.existsSync(abs)) continue;
-    const names = fs.readdirSync(abs);
-    for (const name of names) {
-      if (!name.endsWith('.md')) continue;
-      const relPath = dir ? path.join(dir, name) : name;
-      if (isProtectedFile(relPath)) continue;
-      const absFile = path.join(vaultPath, relPath);
-      if (!fs.statSync(absFile).isFile()) continue;
+  // Known subdirectories: the shared walker handles these, but we need
+  // to skip `source` pages (owned by the bridge).
+  const pages = collectVaultPages(vaultPath, { excludeKinds: ['source'] });
+  for (const page of pages) {
+    entries.push(
+      planEntryFor({
+        vaultPath,
+        relPath: page.relativePath,
+        dir: page.dir,
+        name: path.basename(page.relativePath),
+        title: String(
+          page.frontmatter.title ?? path.basename(page.relativePath, '.md'),
+        ),
+        currentKind: page.kind,
+        currentId:
+          typeof page.frontmatter.id === 'string'
+            ? page.frontmatter.id
+            : undefined,
+        config,
+      }),
+    );
+  }
 
+  // Vault root: loose files like `inbox.md` or hand-dropped ingest
+  // notes. The shared walker doesn't cover the root, so we enumerate
+  // it here and route everything that isn't protected through the
+  // resolver.
+  if (fs.existsSync(vaultPath)) {
+    for (const name of fs.readdirSync(vaultPath)) {
+      if (!name.endsWith('.md')) continue;
+      if (ROOT_PROTECTED.has(name)) continue;
+      const absFile = path.join(vaultPath, name);
+      if (!fs.statSync(absFile).isFile()) continue;
       let parsed;
       try {
         parsed = parseWikiPage(fs.readFileSync(absFile, 'utf-8'));
       } catch {
-        continue; // malformed frontmatter — skip
+        continue;
       }
-
-      const title = String(
-        parsed.frontmatter.title ?? name.replace(/\.md$/, ''),
+      entries.push(
+        planEntryFor({
+          vaultPath,
+          relPath: name,
+          dir: '',
+          name,
+          title: String(parsed.frontmatter.title ?? name.replace(/\.md$/, '')),
+          currentKind: parsed.frontmatter.pageType,
+          currentId:
+            typeof parsed.frontmatter.id === 'string'
+              ? parsed.frontmatter.id
+              : undefined,
+          config,
+        }),
       );
-      const currentKind = parsed.frontmatter.pageType;
-      const currentId =
-        typeof parsed.frontmatter.id === 'string'
-          ? parsed.frontmatter.id
-          : undefined;
-
-      // Only ask the resolver to re-classify when the current page is
-      // generic `entity` or has no pageType at all. Pages already tagged
-      // with a MECE kind stay put (we trust explicit intent).
-      const shouldReclassify =
-        !currentKind || currentKind === 'entity' || dir === '';
-      const decision = shouldReclassify
-        ? resolvePage({ title, pageType: undefined }, config)
-        : resolvePage({ title, pageType: currentKind }, config);
-
-      const currentDir = dir;
-      const newDir = decision.directory;
-      const newKind = decision.kind;
-
-      // Key invariant: the migration only changes a page's DIRECTORY
-      // (i.e., its taxonomy bucket). It never renames the file based on
-      // title length — that would be wholesale churn for zero benefit.
-      // Preserve the existing basename when the page stays in place,
-      // and also when it moves: moving `entities/dom-ingleston.md` →
-      // `people/dom-ingleston.md` keeps the slug intact so wikilinks
-      // using `[[dom-ingleston]]` continue to resolve.
-      const currentBasename = name;
-      const willMove = newDir !== currentDir;
-      const newBasename = currentBasename;
-      const newPath = willMove ? path.join(newDir, newBasename) : relPath;
-      const newId = willMove
-        ? buildPageId(newKind, newBasename)
-        : (currentId ?? buildPageId(newKind, newBasename));
-
-      entries.push({
-        currentPath: relPath,
-        currentKind,
-        currentId,
-        newPath,
-        newKind,
-        newId,
-        decision,
-        willMove,
-      });
     }
   }
 
@@ -183,6 +145,57 @@ export function buildMigrationPlan(vaultPath: string): MigrationPlan {
     entries,
     skippedCount: entries.filter((e) => !e.willMove).length,
     movingCount: entries.filter((e) => e.willMove).length,
+  };
+}
+
+/**
+ * Single-entry planner. Pulled out of the loop so both the subtree
+ * walk and the root-file walk share the same resolver + move logic.
+ */
+function planEntryFor(params: {
+  vaultPath: string;
+  relPath: string;
+  dir: string;
+  name: string;
+  title: string;
+  currentKind: WikiPageKind | undefined;
+  currentId: string | undefined;
+  config: ReturnType<typeof readResolverConfig>;
+}): MigrationPlanEntry {
+  // Re-classify when the page is generic `entity` or untyped, or when
+  // it's a loose root file. Otherwise trust the explicit pageType.
+  const shouldReclassify =
+    !params.currentKind || params.currentKind === 'entity' || params.dir === '';
+  const decision = shouldReclassify
+    ? resolvePage({ title: params.title, pageType: undefined }, params.config)
+    : resolvePage(
+        { title: params.title, pageType: params.currentKind },
+        params.config,
+      );
+
+  const newDir = decision.directory;
+  const newKind = decision.kind;
+
+  // Invariant: the migration only changes a page's directory. It never
+  // renames based on title length — that would be wholesale churn for
+  // zero benefit. The slug stays intact so `[[basename]]` wikilinks
+  // keep resolving after the move.
+  const willMove = newDir !== params.dir;
+  const newBasename = params.name;
+  const newPath = willMove ? path.join(newDir, newBasename) : params.relPath;
+  const newId = willMove
+    ? buildPageId(newKind, newBasename)
+    : (params.currentId ?? buildPageId(newKind, newBasename));
+
+  return {
+    currentPath: params.relPath,
+    currentKind: params.currentKind,
+    currentId: params.currentId,
+    newPath,
+    newKind,
+    newId,
+    decision,
+    willMove,
   };
 }
 

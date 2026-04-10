@@ -35,28 +35,14 @@ import {
   renderRelatedBlock,
   summarizePage,
 } from './related.js';
+import { VAULT_DIRS as WALKED_DIRS } from './vault-walk.js';
 
+// Compile walks VAULT_DIRS plus reports/ (which lint excludes to avoid
+// the circular "lint its own output" problem). Report pages still need
+// index regeneration.
 const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
-  // Legacy 5-dir layout — still produced by older vaults and OpenClaw.
-  // Migration flows upgrade entities → people/companies but we keep the
-  // entities/ entry so mid-migration vaults still compile.
-  { dir: 'entities', kind: 'entity' },
-  { dir: 'concepts', kind: 'concept' },
-  { dir: 'syntheses', kind: 'synthesis' },
-  { dir: 'sources', kind: 'source' },
+  ...WALKED_DIRS,
   { dir: 'reports', kind: 'report' },
-  { dir: 'originals', kind: 'original' },
-  // Phase 3 — MECE taxonomy expansion.
-  { dir: 'people', kind: 'person' },
-  { dir: 'companies', kind: 'company' },
-  { dir: 'meetings', kind: 'meeting' },
-  { dir: 'deals', kind: 'deal' },
-  { dir: 'projects', kind: 'project' },
-  { dir: 'ideas', kind: 'idea' },
-  { dir: 'writing', kind: 'writing' },
-  { dir: 'personal', kind: 'personal-note' },
-  { dir: 'household', kind: 'household-item' },
-  { dir: 'inbox', kind: 'inbox-item' },
 ];
 
 const MANAGED_BLOCK_NAME = 'related';

@@ -42,11 +42,27 @@ export class YouTubeExtractor implements Extractor {
 
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-yt-'));
     try {
-      // Fetch metadata as JSON (includes title, uploader, description)
+      // Single yt-dlp invocation: `-J` emits metadata JSON on stdout
+      // AND the sibling --write-auto-subs/--write-subs flags drop a
+      // .vtt next to the (skipped) video download. Previously this
+      // was two separate yt-dlp runs, each paying process-start cost.
       const meta = await spawnCapture(
         'yt-dlp',
-        ['--dump-json', '--skip-download', '--no-warnings', input.url],
-        { timeoutMs: 90_000 },
+        [
+          '-J',
+          '--skip-download',
+          '--write-auto-subs',
+          '--write-subs',
+          '--sub-lang',
+          'en.*',
+          '--sub-format',
+          'vtt',
+          '--no-warnings',
+          '-o',
+          path.join(workDir, '%(id)s.%(ext)s'),
+          input.url,
+        ],
+        { timeoutMs: 120_000 },
       );
 
       let title = 'YouTube video';
@@ -68,25 +84,6 @@ export class YouTubeExtractor implements Extractor {
       } catch {
         // metadata unparseable — fall through with whatever we've got
       }
-
-      // Download subtitles only (no video)
-      await spawnCapture(
-        'yt-dlp',
-        [
-          '--skip-download',
-          '--write-auto-subs',
-          '--write-subs',
-          '--sub-lang',
-          'en.*',
-          '--sub-format',
-          'vtt',
-          '--no-warnings',
-          '-o',
-          path.join(workDir, '%(id)s.%(ext)s'),
-          input.url,
-        ],
-        { timeoutMs: 120_000 },
-      );
 
       const vttFile = fs.readdirSync(workDir).find((f) => f.endsWith('.vtt'));
       const transcript = vttFile

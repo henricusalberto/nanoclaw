@@ -17,119 +17,23 @@
  * changes on the second run. Writes are atomic via `atomicWriteFile`.
  */
 
-import fs from 'fs';
 import path from 'path';
 
-import { atomicWriteFile, readJsonOrDefault } from './fs-util.js';
+import { atomicWriteFile } from './fs-util.js';
 import {
   parseWikiPage,
-  readWikiPage,
   serializeWikiPage,
   WikiClaim,
   WikiPageFrontmatter,
-  WikiPageKind,
 } from './markdown.js';
-import { vaultPaths } from './paths.js';
 import { renderSourceAttribution } from './source-attribution.js';
+import {
+  collectVaultPages,
+  loadCollisionBlocklist,
+  VaultPageRecord,
+} from './vault-walk.js';
 
-const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
-  { dir: 'entities', kind: 'entity' },
-  { dir: 'concepts', kind: 'concept' },
-  { dir: 'syntheses', kind: 'synthesis' },
-  { dir: 'sources', kind: 'source' },
-  // originals/ intentionally omitted: originals are immutable verbatim
-  // capture and must never be touched by autofix.
-];
-
-const DEFAULT_BLOCKLIST: string[] = [
-  'The',
-  'A',
-  'An',
-  'And',
-  'Or',
-  'But',
-  'If',
-  'Then',
-  'When',
-  'Where',
-  'What',
-  'Why',
-  'How',
-  'Who',
-  'With',
-  'Without',
-  'From',
-  'To',
-  'In',
-  'On',
-  'At',
-  'By',
-  'For',
-  'Of',
-  'As',
-  'Is',
-  'Was',
-  'Are',
-  'Were',
-  'Be',
-  'Been',
-  'Being',
-  'Have',
-  'Has',
-  'Had',
-  'Do',
-  'Does',
-  'Did',
-  'Will',
-  'Would',
-  'Could',
-  'Should',
-  'May',
-  'Might',
-  'Can',
-  'Cannot',
-  'Not',
-  'No',
-  'Yes',
-  'All',
-  'Any',
-  'Each',
-  'Every',
-  'Some',
-  'Most',
-  'More',
-  'Less',
-  'Very',
-  'Just',
-  'Only',
-  'Also',
-  'Even',
-  'Still',
-  'Yet',
-  'Now',
-  'Then',
-  'Here',
-  'There',
-  'Today',
-  'Yesterday',
-  'Tomorrow',
-  'Wiki',
-  'Source',
-  'Note',
-  'Goal',
-  'Status',
-  'Overview',
-  'Content',
-];
-
-interface PageRecord {
-  filePath: string;
-  relativePath: string;
-  basename: string;
-  kind: WikiPageKind;
-  frontmatter: WikiPageFrontmatter;
-  body: string;
-}
+type PageRecord = VaultPageRecord;
 
 export interface AutofixResult {
   pagesScanned: number;
@@ -140,45 +44,10 @@ export interface AutofixResult {
   changes: Array<{ pagePath: string; changes: string[] }>;
 }
 
-// =============================================================================
-// Vault walk
-// =============================================================================
-
 function collectPages(vaultPath: string): PageRecord[] {
-  const records: PageRecord[] = [];
-  for (const { dir, kind } of VAULT_DIRS) {
-    const dirPath = path.join(vaultPath, dir);
-    if (!fs.existsSync(dirPath)) continue;
-    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-      if (entry.name === 'index.md') continue;
-      const filePath = path.join(dirPath, entry.name);
-      const parsed = readWikiPage(filePath);
-      records.push({
-        filePath,
-        relativePath: path.relative(vaultPath, filePath),
-        basename: path.basename(entry.name, '.md').toLowerCase(),
-        kind,
-        frontmatter: parsed.frontmatter,
-        body: parsed.body,
-      });
-    }
-  }
-  return records;
-}
-
-function loadBlocklist(vaultPath: string): Set<string> {
-  const blocklistPath = path.join(
-    vaultPaths(vaultPath).stateDir,
-    'entity-collision-blocklist.json',
-  );
-  const data = readJsonOrDefault<{ blocklist: string[] }>(blocklistPath, {
-    blocklist: DEFAULT_BLOCKLIST,
-  });
-  const words = Array.isArray(data.blocklist)
-    ? data.blocklist
-    : DEFAULT_BLOCKLIST;
-  return new Set(words.map((w) => w.toLowerCase()));
+  // Autofix skips `originals/` — those pages are immutable verbatim
+  // capture and must never be rewritten.
+  return collectVaultPages(vaultPath, { excludeKinds: ['original'] });
 }
 
 // =============================================================================
@@ -411,7 +280,7 @@ export async function runAutofix(
 ): Promise<AutofixResult> {
   const startedAt = Date.now();
   const pages = collectPages(vaultPath);
-  const blocklist = loadBlocklist(vaultPath);
+  const blocklist = loadCollisionBlocklist(vaultPath);
 
   // Index source pages for claim attribution backfill
   const sourcesById = new Map<string, PageRecord>();

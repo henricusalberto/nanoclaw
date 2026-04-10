@@ -508,14 +508,21 @@ async function buildContainerArgs(
 }
 
 /**
- * Shared wiki-inbox vault path. Phase 2 entity-scan writes all groups'
- * queue rows to the single wiki-inbox vault so the scanner only has one
- * place to look.
+ * Shared wiki-inbox vault path. All groups' entity-scan queue rows land
+ * in this single vault so the scanner only has one place to look.
+ *
+ * Cached after first resolution: the vault location doesn't change at
+ * runtime, and the previous implementation paid an `fs.existsSync` stat
+ * per inbound message.
  */
+let cachedWikiInboxVaultPath: { path: string | null } | null = null;
 function wikiInboxVaultPath(): string | null {
+  if (cachedWikiInboxVaultPath) return cachedWikiInboxVaultPath.path;
   const p = path.join(process.cwd(), 'groups', 'telegram_wiki-inbox', 'wiki');
   const state = path.join(p, '.openclaw-wiki');
-  return fs.existsSync(state) ? p : null;
+  const resolved = fs.existsSync(state) ? p : null;
+  cachedWikiInboxVaultPath = { path: resolved };
+  return resolved;
 }
 
 /**

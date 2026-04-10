@@ -147,22 +147,19 @@ export function pruneImportedSourceEntries(params: {
 }
 
 /**
- * Compute the fingerprint of the bridge page template inputs. When this
- * function's inputs change (e.g., we add a new frontmatter field, change
- * the wrapping markers), every bridged page is re-rendered automatically.
+ * Compute the fingerprint of the bridge page template inputs. Changing
+ * any field bumps every affected page on the next bridge sync.
  *
- * Phase 2.5 extension: `extractorName` + `extractorVersion` are mixed in
- * so bumping an extractor's version (e.g., PDF extractor output format
- * changes) forces re-extraction of every page it produced. Omit both
- * for legacy markdown-only sources to preserve the original fingerprint.
+ * `extractor` is mixed in for non-markdown sources so bumping an
+ * extractor version forces re-extraction of every page it produced.
+ * Markdown sources pass it undefined and keep the original fingerprint.
  */
 export function computeRenderFingerprint(params: {
   artifactKind: string;
   sourceRelativePath: string;
   agentIds: string[];
   templateVersion: number;
-  extractorName?: string;
-  extractorVersion?: string;
+  extractor?: { name: string; version: string };
 }): string {
   const payload: Record<string, unknown> = {
     artifactKind: params.artifactKind,
@@ -170,9 +167,10 @@ export function computeRenderFingerprint(params: {
     agentIds: [...params.agentIds].sort(),
     templateVersion: params.templateVersion,
   };
-  if (params.extractorName) payload.extractorName = params.extractorName;
-  if (params.extractorVersion)
-    payload.extractorVersion = params.extractorVersion;
+  if (params.extractor) {
+    payload.extractorName = params.extractor.name;
+    payload.extractorVersion = params.extractor.version;
+  }
   return crypto
     .createHash('sha1')
     .update(JSON.stringify(payload))

@@ -21,15 +21,12 @@ import {
   WIKI_AGING_DAYS,
   WIKI_STALE_DAYS,
 } from './claim-health.js';
-import { readJsonOrDefault } from './fs-util.js';
 import { appendWikiLogEvent } from './log.js';
 import {
   extractWikiLinks,
   parseWikiPage,
-  readWikiPage,
   replaceManagedBlock,
   WikiClaim,
-  WikiPageFrontmatter,
   WikiPageKind,
 } from './markdown.js';
 import { vaultPaths } from './paths.js';
@@ -38,31 +35,15 @@ import {
   extractAllSourceAttributions,
   SOURCE_ATTRIBUTION_RE,
 } from './source-attribution.js';
+import {
+  collectVaultPages,
+  loadCollisionBlocklist,
+  VAULT_DIRS,
+  VaultPageRecord,
+} from './vault-walk.js';
 
-const VAULT_DIRS: { dir: string; kind: WikiPageKind }[] = [
-  { dir: 'entities', kind: 'entity' },
-  { dir: 'concepts', kind: 'concept' },
-  { dir: 'syntheses', kind: 'synthesis' },
-  { dir: 'sources', kind: 'source' },
-  { dir: 'originals', kind: 'original' },
-  // Phase 3 — MECE taxonomy expansion.
-  { dir: 'people', kind: 'person' },
-  { dir: 'companies', kind: 'company' },
-  { dir: 'meetings', kind: 'meeting' },
-  { dir: 'deals', kind: 'deal' },
-  { dir: 'projects', kind: 'project' },
-  { dir: 'ideas', kind: 'idea' },
-  { dir: 'writing', kind: 'writing' },
-  { dir: 'personal', kind: 'personal-note' },
-  { dir: 'household', kind: 'household-item' },
-  { dir: 'inbox', kind: 'inbox-item' },
-  // reports/ deliberately excluded — those are lint's own output, linting
-  // them would be circular noise
-];
-
-// Phase 3: every recognised page kind. Built from VAULT_DIRS plus
-// `report` (which lives in reports/ but is excluded from the lint
-// walk itself). Used by `unknown-page-type` to reject typos or kinds
+// Every recognised page kind — VAULT_DIRS (which excludes report) plus
+// report itself. Used by `unknown-page-type` to reject typos or kinds
 // that were removed from the union.
 const KNOWN_PAGE_KINDS: Set<string> = new Set([
   ...VAULT_DIRS.map((v) => v.kind),
@@ -112,145 +93,10 @@ export interface LintResult {
   durationMs: number;
 }
 
-interface PageRecord {
-  filePath: string;
-  relativePath: string;
-  basename: string;
-  kind: WikiPageKind | undefined;
-  expectedKind: WikiPageKind;
-  frontmatter: WikiPageFrontmatter;
-  body: string;
-}
-
-// =============================================================================
-// Collision blocklist — words that happen to collide with page titles or
-// basenames but shouldn't trigger unlinked-entity-mention warnings.
-// Seeded on first run if missing.
-// =============================================================================
-
-const DEFAULT_COLLISION_BLOCKLIST: string[] = [
-  // Common English words that are also valid title-case tokens
-  'The',
-  'A',
-  'An',
-  'And',
-  'Or',
-  'But',
-  'If',
-  'Then',
-  'When',
-  'Where',
-  'What',
-  'Why',
-  'How',
-  'Who',
-  'With',
-  'Without',
-  'From',
-  'To',
-  'In',
-  'On',
-  'At',
-  'By',
-  'For',
-  'Of',
-  'As',
-  'Is',
-  'Was',
-  'Are',
-  'Were',
-  'Be',
-  'Been',
-  'Being',
-  'Have',
-  'Has',
-  'Had',
-  'Do',
-  'Does',
-  'Did',
-  'Will',
-  'Would',
-  'Could',
-  'Should',
-  'May',
-  'Might',
-  'Can',
-  'Cannot',
-  'Not',
-  'No',
-  'Yes',
-  'All',
-  'Any',
-  'Each',
-  'Every',
-  'Some',
-  'Most',
-  'More',
-  'Less',
-  'Very',
-  'Just',
-  'Only',
-  'Also',
-  'Even',
-  'Still',
-  'Yet',
-  'Now',
-  'Then',
-  'Here',
-  'There',
-  'Today',
-  'Yesterday',
-  'Tomorrow',
-  // NanoClaw-specific false positives
-  'Wiki',
-  'Source',
-  'Note',
-  'Goal',
-  'Status',
-  'Overview',
-  'Content',
-];
-
-function loadCollisionBlocklist(vaultPath: string): Set<string> {
-  const blocklistPath = path.join(
-    vaultPaths(vaultPath).stateDir,
-    'entity-collision-blocklist.json',
-  );
-  const data = readJsonOrDefault<{ blocklist: string[] }>(blocklistPath, {
-    blocklist: DEFAULT_COLLISION_BLOCKLIST,
-  });
-  const words = Array.isArray(data.blocklist)
-    ? data.blocklist
-    : DEFAULT_COLLISION_BLOCKLIST;
-  return new Set(words.map((w) => w.toLowerCase()));
-}
-
-// =============================================================================
-// Walk + parse
-// =============================================================================
+type PageRecord = VaultPageRecord;
 
 function collectPages(vaultPath: string): PageRecord[] {
-  const records: PageRecord[] = [];
-  for (const { dir, kind: expectedKind } of VAULT_DIRS) {
-    const dirPath = path.join(vaultPath, dir);
-    if (!fs.existsSync(dirPath)) continue;
-    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-      if (entry.name === 'index.md') continue;
-      const filePath = path.join(dirPath, entry.name);
-      const parsed = readWikiPage(filePath);
-      records.push({
-        filePath,
-        relativePath: path.relative(vaultPath, filePath),
-        basename: path.basename(entry.name, '.md').toLowerCase(),
-        kind: parsed.frontmatter.pageType,
-        expectedKind,
-        frontmatter: parsed.frontmatter,
-        body: parsed.body,
-      });
-    }
-  }
-  return records;
+  return collectVaultPages(vaultPath);
 }
 
 // =============================================================================
@@ -539,15 +385,18 @@ function checkClaimAttribution(page: PageRecord): LintIssue[] {
   return issues;
 }
 
+// Module-scope regex — hoisted out of checkTimelineAttribution so we
+// don't allocate a new RegExp on every page scan.
+const TIMELINE_BLOCK_RE =
+  /<!--\s*openclaw:wiki:timeline:start\s*-->([\s\S]*?)<!--\s*openclaw:wiki:timeline:end\s*-->/;
+
 /**
- * Phase 5 stub: timeline-missing-attribution. Runs against the auto-
- * generated `## Timeline` managed block body when Phase 5 ships. Until
- * then, this check is a no-op (blocks don't exist yet).
+ * Phase 5 stub: runs against the auto-generated `## Timeline` managed
+ * block body once Phase 5 ships. Until then the block is absent on
+ * every page and this is a no-op.
  */
 function checkTimelineAttribution(page: PageRecord): LintIssue[] {
   const issues: LintIssue[] = [];
-  const TIMELINE_BLOCK_RE =
-    /<!--\s*openclaw:wiki:timeline:start\s*-->([\s\S]*?)<!--\s*openclaw:wiki:timeline:end\s*-->/;
   const m = page.body.match(TIMELINE_BLOCK_RE);
   if (!m) return issues;
 
@@ -571,118 +420,112 @@ function checkTimelineAttribution(page: PageRecord): LintIssue[] {
 // Phase 1: Iron law of back-linking — unlinked-entity-mention
 // =============================================================================
 
+// Regex stripping patterns — hoisted so each call reuses one set of
+// compiled RegExps instead of allocating fresh ones per page.
+const STRIP_PATTERNS: RegExp[] = [
+  /^---\n[\s\S]*?\n---\n/, // stray frontmatter
+  /```[\s\S]*?```/g, // fenced code
+  /~~~[\s\S]*?~~~/g, // alt-fence code
+  /<!--\s*openclaw:wiki:[a-z-]+:start\s*-->[\s\S]*?<!--\s*openclaw:wiki:[a-z-]+:end\s*-->/g,
+  /<!--\s*openclaw:human:start\s*-->[\s\S]*?<!--\s*openclaw:human:end\s*-->/g,
+  /<!--[\s\S]*?-->/g, // any HTML comment
+  /`[^`\n]+`/g, // inline code
+  /\[\[[^\]]+\]\]/g, // [[wikilinks]]
+  /\[[^\]]*\]\([^)]+\)/g, // [md](links)
+  /^#{1,6}\s.*$/gm, // headings
+];
+
 /**
- * Strip regions of the body where entity mentions should NOT be detected:
- *   - Frontmatter block (between the first two `---` lines)
- *   - Fenced code blocks (```...```)
- *   - Inline code (`...`)
- *   - Existing [[wikilinks]] and [md](links)
- *   - Any managed block `<!-- openclaw:wiki:*:start --> ... :end -->`
- *   - HTML comments
- *   - Line-start headings (to avoid matching page H1 as an "unlinked mention")
+ * Strip regions of the body where entity mentions should NOT be
+ * detected: code fences, managed blocks, HTML comments, existing
+ * wikilinks/md-links, headings.
  */
 function extractScannableProse(body: string): string {
   let text = body;
-  // Frontmatter (if somehow present in body — shouldn't be after parseWikiPage)
-  text = text.replace(/^---\n[\s\S]*?\n---\n/, '');
-  // Fenced code blocks
-  text = text.replace(/```[\s\S]*?```/g, ' ');
-  text = text.replace(/~~~[\s\S]*?~~~/g, ' ');
-  // Any managed block
-  text = text.replace(
-    /<!--\s*openclaw:wiki:[a-z-]+:start\s*-->[\s\S]*?<!--\s*openclaw:wiki:[a-z-]+:end\s*-->/g,
-    ' ',
-  );
-  text = text.replace(
-    /<!--\s*openclaw:human:start\s*-->[\s\S]*?<!--\s*openclaw:human:end\s*-->/g,
-    ' ',
-  );
-  // HTML comments
-  text = text.replace(/<!--[\s\S]*?-->/g, ' ');
-  // Inline code
-  text = text.replace(/`[^`\n]+`/g, ' ');
-  // Wikilinks [[...]]
-  text = text.replace(/\[\[[^\]]+\]\]/g, ' ');
-  // Markdown links [text](url)
-  text = text.replace(/\[[^\]]*\]\([^)]+\)/g, ' ');
-  // Headings (entire lines starting with #)
-  text = text.replace(/^#{1,6}\s.*$/gm, ' ');
+  for (const re of STRIP_PATTERNS) text = text.replace(re, ' ');
   return text;
 }
 
 interface MentionCandidate {
-  /** The literal string found in body */
   term: string;
-  /** The page id to link to */
   targetPageId: string;
-  /** The page basename (for wikilink rendering) */
   targetBasename: string;
-  /** The page title (for display) */
   targetTitle: string;
-  /** Index into the cleaned body where the match starts */
   index: number;
+}
+
+/**
+ * Precomputed target index for unlinked-mention detection. Built ONCE
+ * per lint run (not per page) so the O(pages²) regex compilation loop
+ * becomes O(pages) compiled-once + one alternation match per page.
+ *
+ * `regex` is a single global alternation `\b(Title1|Title2|...)\b`
+ * with a capture group. `targetByTerm` maps the matched string back
+ * to its page record.
+ */
+interface MentionTargetIndex {
+  regex: RegExp | null;
+  targetByTerm: Map<string, PageRecord>;
+}
+
+function buildMentionTargetIndex(
+  pages: PageRecord[],
+  blocklist: Set<string>,
+): MentionTargetIndex {
+  const targetByTerm = new Map<string, PageRecord>();
+  const terms: string[] = [];
+  for (const target of pages) {
+    const title = target.frontmatter.title || '';
+    if (title.length < 4 || !/^[A-Z]/.test(title)) continue;
+    if (blocklist.has(title.toLowerCase())) continue;
+    if (targetByTerm.has(title)) continue; // duplicate titles: first wins
+    targetByTerm.set(title, target);
+    terms.push(title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  }
+  if (terms.length === 0) return { regex: null, targetByTerm };
+  // Longer terms first so "Dom Ingleston" wins over "Dom" at the same
+  // position in the alternation.
+  terms.sort((a, b) => b.length - a.length);
+  return {
+    regex: new RegExp(`\\b(${terms.join('|')})\\b`, 'g'),
+    targetByTerm,
+  };
 }
 
 function findUnlinkedMentions(
   page: PageRecord,
-  allPages: PageRecord[],
-  blocklist: Set<string>,
+  index: MentionTargetIndex,
 ): MentionCandidate[] {
+  if (!index.regex) return [];
   const prose = extractScannableProse(page.body);
-  const candidates: MentionCandidate[] = [];
-
-  // Build a list of (term, page) pairs to search for. Use each page's
-  // title (length ≥4, excluding blocklist) AND each page's basename if
-  // it's multi-word or CamelCase.
-  const targets: { term: string; target: PageRecord }[] = [];
-  for (const target of allPages) {
-    if (target.filePath === page.filePath) continue;
-    const title = target.frontmatter.title || '';
-    if (title.length >= 4 && /^[A-Z]/.test(title)) {
-      // Only search for distinctive titles — skip blocklist members
-      if (!blocklist.has(title.toLowerCase())) {
-        targets.push({ term: title, target });
-      }
-    }
-    // Also search for the basename as a capitalized slug (e.g. "dom-ingleston"
-    // would match "Dom Ingleston" — already covered by title). Skip basename
-    // matching for now to avoid double-counting.
-  }
-
-  for (const { term, target } of targets) {
-    // Escape regex special chars in term
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Word-boundary match, case-sensitive (to preserve capitalization
-    // signal), global to find all occurrences
-    const re = new RegExp(`\\b${escaped}\\b`, 'g');
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(prose)) !== null) {
-      candidates.push({
-        term: m[0],
-        targetPageId: target.frontmatter.id || target.basename,
-        targetBasename: target.basename,
-        targetTitle: target.frontmatter.title || target.basename,
-        index: m.index,
-      });
-    }
-  }
-
-  // Deduplicate: one warning per (page, targetPageId) pair, not per occurrence.
   const seen = new Set<string>();
   const unique: MentionCandidate[] = [];
-  for (const c of candidates) {
-    if (seen.has(c.targetPageId)) continue;
-    seen.add(c.targetPageId);
-    unique.push(c);
+  // Reset lastIndex so repeated calls against the same global regex
+  // walk from the top each time.
+  index.regex.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = index.regex.exec(prose)) !== null) {
+    const term = m[1];
+    const target = index.targetByTerm.get(term);
+    if (!target) continue;
+    if (target.filePath === page.filePath) continue; // self-mention
+    const targetPageId = target.frontmatter.id || target.basename;
+    if (seen.has(targetPageId)) continue;
+    seen.add(targetPageId);
+    unique.push({
+      term,
+      targetPageId,
+      targetBasename: target.basename,
+      targetTitle: target.frontmatter.title || target.basename,
+      index: m.index,
+    });
   }
-
   return unique;
 }
 
 function checkUnlinkedMentions(
   page: PageRecord,
-  allPages: PageRecord[],
-  blocklist: Set<string>,
+  index: MentionTargetIndex,
 ): LintIssue[] {
   const issues: LintIssue[] = [];
   if (
@@ -697,7 +540,7 @@ function checkUnlinkedMentions(
   // are fine — Obsidian's backlinks panel and graph view surface them.
   const existingLinks = new Set(extractWikiLinks(page.body));
 
-  const candidates = findUnlinkedMentions(page, allPages, blocklist);
+  const candidates = findUnlinkedMentions(page, index);
   for (const c of candidates) {
     if (existingLinks.has(c.targetBasename)) continue;
     issues.push({
@@ -827,13 +670,17 @@ export async function lintWiki(vaultPath: string): Promise<LintResult> {
     pagesByBasename.set(p.basename, p);
   }
 
+  // Build the mention-target alternation regex ONCE — reused across
+  // every page in the loop below. Previously this was recomputed per
+  // page, turning the check into O(pages²) regex compilations.
+  const mentionIndex = buildMentionTargetIndex(pages, collisionBlocklist);
+
   const allIssues: LintIssue[] = [];
   for (const p of pages) {
     allIssues.push(...checkPage(p, pagesById, pagesByBasename));
-    // Phase 1 checks
     allIssues.push(...checkClaimAttribution(p));
     allIssues.push(...checkTimelineAttribution(p));
-    allIssues.push(...checkUnlinkedMentions(p, pages, collisionBlocklist));
+    allIssues.push(...checkUnlinkedMentions(p, mentionIndex));
   }
   allIssues.push(...checkDuplicateIds(pages));
   allIssues.push(...checkClaimConflicts(pages));
