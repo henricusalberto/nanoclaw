@@ -3,13 +3,19 @@ import path from 'path';
 import { logger } from './logger.js';
 
 /**
- * Parse the .env file and return values for the requested keys.
+ * Parse a .env-format file and return values for the requested keys.
+ * Defaults to `<cwd>/.env`; pass `filePath` to read a specific file
+ * (e.g. shared secret files under ~/.openclaw/workspace/secrets/).
+ *
  * Does NOT load anything into process.env — callers decide what to
  * do with the values. This keeps secrets out of the process environment
  * so they don't leak to child processes.
  */
-export function readEnvFile(keys: string[]): Record<string, string> {
-  const envFile = path.join(process.cwd(), '.env');
+export function readEnvFile(
+  keys: string[],
+  filePath?: string,
+): Record<string, string> {
+  const envFile = filePath ?? path.join(process.cwd(), '.env');
   let content: string;
   try {
     content = fs.readFileSync(envFile, 'utf-8');

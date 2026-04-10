@@ -505,6 +505,7 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__sunsama__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -520,6 +521,21 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        // Sunsama: official remote MCP at api.sunsama.com/mcp. Authenticated
+        // via a long-lived bearer token injected by container-runner.ts from
+        // ~/.openclaw/workspace/secrets/sunsama.env. Only registered when the
+        // env var is present, so groups without the secret stay clean.
+        ...(process.env.SUNSAMA_BEARER_TOKEN
+          ? {
+              sunsama: {
+                type: 'http' as const,
+                url: 'https://api.sunsama.com/mcp',
+                headers: {
+                  Authorization: `Bearer ${process.env.SUNSAMA_BEARER_TOKEN}`,
+                },
+              },
+            }
+          : {}),
         // QMD is exposed via wrapper tools in nanoclaw's own stdio MCP server
         // (see ipc-mcp-stdio.ts: qmd_search/qmd_get/qmd_status). We do NOT
         // register qmd's upstream MCP server directly — its tool description

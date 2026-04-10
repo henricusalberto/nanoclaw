@@ -12,6 +12,16 @@ Daily memory files live in `memory/YYYY-MM-DD*.md`. Today's files are loaded at 
 
 When you complete significant work in a session, write a memory file immediately — don't wait for `/wrap`. Use `memory/YYYY-MM-DD-<topic-slug>.md` (CET date, short slug). Format and conventions are in `memory/README.md`. The `/wrap` skill handles end-of-session wrap-up.
 
+## Productivity Frameworks
+
+Maurizio follows specific task and planning frameworks. These are in `productivity-frameworks.md` — read it when creating tasks, planning a day, or doing weekly reviews. Key rules to always apply:
+- Task titles use specific action verbs (send, call, book — not "think about" or "look into")
+- Every task includes all context needed (link, number, path) in the notes
+- Never create "read/watch/listen" tasks — content goes to read-later, not the task list
+- Max 3 priority tasks per day
+- Weekly review: Email → Calendar → Notes → Tasks (30 min, Monday morning or Sunday evening)
+- Organize everything by PARA: Projects (goal + deadline), Areas (ongoing standard), Resources (interests), Archives (inactive). File tasks, notes, and files by actionability — not subject.
+
 ## Core Behavior
 
 - Just answer. Lead with the point.
