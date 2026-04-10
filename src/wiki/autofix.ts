@@ -1,10 +1,13 @@
 /**
- * Phase 1 autofix — repair the two auto-fixable lint issues without LLM:
+ * Phase 1 autofix — repair the auto-fixable lint issues without LLM:
  *
  *   1. `claim-missing-attribution`: when a claim's evidence[] has a
  *      `sourceId` that resolves to an ingested source page, backfill the
  *      evidence note with `[Source: <source-title>, <source-date>]`
- *      synthesized from the source page's frontmatter.
+ *      synthesized from the source page's frontmatter. When no source
+ *      resolves, add a fallback `[Source: Maurizio, direct, <date>]`
+ *      attribution — these are hand-written claims and Maurizio is the
+ *      authoritative source by definition.
  *
  *   2. `unlinked-entity-mention`: when the body of page A mentions the
  *      title of page B (exact, case-sensitive, word-bounded), and A has
@@ -65,20 +68,38 @@ function backfillClaimAttribution(
   claim: WikiClaim,
   sourcesById: Map<string, PageRecord>,
   sourcesByBasename: Map<string, PageRecord>,
+  pageUpdatedAt: string | undefined,
 ): boolean {
-  if (!Array.isArray(claim.evidence) || claim.evidence.length === 0) {
-    return false;
-  }
   // If claim already has attribution (inline in text or in any evidence
   // note), skip.
   if (/\[Source:/.test(claim.text)) return false;
-  for (const e of claim.evidence) {
-    if (e.note && /\[Source:/.test(e.note)) return false;
+  if (Array.isArray(claim.evidence)) {
+    for (const e of claim.evidence) {
+      if (e.note && /\[Source:/.test(e.note)) return false;
+    }
+  }
+  if (!Array.isArray(claim.evidence)) claim.evidence = [];
+
+  // Fallback when the claim has no evidence at all — hand-written claims on
+  // hand-written pages. Maurizio is the authoritative source.
+  if (claim.evidence.length === 0) {
+    const date = pickFallbackDate(claim.updatedAt, pageUpdatedAt);
+    if (!date) return false;
+    claim.evidence.push({
+      note: renderSourceAttribution({
+        who: 'Maurizio',
+        context: 'direct',
+        date,
+      }),
+    });
+    return true;
   }
 
   let mutated = false;
+  let anySourceIdSeen = false;
   for (const e of claim.evidence) {
     if (!e.sourceId) continue;
+    anySourceIdSeen = true;
     // Try to resolve sourceId to an actual source page.
     // sourceId formats we've seen:
     //   "knowledge-files-2026" — abstract label, not a page id
@@ -92,12 +113,11 @@ function backfillClaimAttribution(
       sourcesByBasename.get(`bridge-${e.sourceId.toLowerCase()}`);
     if (!srcPage) {
       // Abstract label — synthesize attribution from the sourceId itself +
-      // the claim's updatedAt (or evidence updatedAt). Better than nothing.
-      const date = e.updatedAt
-        ? e.updatedAt.slice(0, 10)
-        : claim.updatedAt
-          ? claim.updatedAt.slice(0, 10)
-          : null;
+      // the claim's updatedAt (or evidence updatedAt, or page updatedAt).
+      const date = pickFallbackDate(
+        e.updatedAt || claim.updatedAt,
+        pageUpdatedAt,
+      );
       if (!date) continue;
       const attribution = renderSourceAttribution({
         who: e.sourceId,
@@ -114,8 +134,7 @@ function backfillClaimAttribution(
     const srcDate =
       (srcPage.frontmatter.ingestedAt as string | undefined)?.slice(0, 10) ||
       (srcPage.frontmatter.updatedAt as string | undefined)?.slice(0, 10) ||
-      e.updatedAt?.slice(0, 10) ||
-      null;
+      pickFallbackDate(e.updatedAt, pageUpdatedAt);
     if (!srcDate) continue;
     const attribution = renderSourceAttribution({
       who: String(srcTitle),
@@ -125,7 +144,34 @@ function backfillClaimAttribution(
     e.note = e.note ? `${e.note} ${attribution}` : attribution;
     mutated = true;
   }
+
+  // If we saw no sourceId-bearing evidence at all (just notes/paths), fall
+  // back to the Maurizio-direct attribution on a new evidence entry.
+  if (!mutated && !anySourceIdSeen) {
+    const date = pickFallbackDate(claim.updatedAt, pageUpdatedAt);
+    if (date) {
+      claim.evidence.push({
+        note: renderSourceAttribution({
+          who: 'Maurizio',
+          context: 'direct',
+          date,
+        }),
+      });
+      mutated = true;
+    }
+  }
+
   return mutated;
+}
+
+function pickFallbackDate(
+  claimUpdatedAt: string | undefined,
+  pageUpdatedAt: string | undefined,
+): string | null {
+  const src = claimUpdatedAt || pageUpdatedAt;
+  if (!src) return null;
+  const m = src.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
 }
 
 // =============================================================================
@@ -256,6 +302,9 @@ function findMentionsToWrap(
 
   for (const target of allPages) {
     if (target.filePath === page.filePath) continue;
+    // Originals are verbatim quotes — titles are full sentences that
+    // repeat legitimately across prose. Skip as wrap targets.
+    if (target.kind === 'original') continue;
     const title = (target.frontmatter.title as string | undefined) || '';
     if (title.length < 4 || !/^[A-Z]/.test(title)) continue;
     if (blocklist.has(title.toLowerCase())) continue;
@@ -310,12 +359,15 @@ export async function runAutofix(
 
     // Fix 1: Backfill claim attributions
     if (Array.isArray(newFm.claims)) {
+      const pageUpdatedAt =
+        typeof newFm.updatedAt === 'string' ? newFm.updatedAt : undefined;
       for (const claim of newFm.claims) {
         const before = JSON.stringify(claim.evidence);
         const mutated = backfillClaimAttribution(
           claim,
           sourcesById,
           sourcesByBasename,
+          pageUpdatedAt,
         );
         if (mutated) {
           fmModified = true;

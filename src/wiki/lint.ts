@@ -475,6 +475,9 @@ function buildMentionTargetIndex(
   const targetByTerm = new Map<string, PageRecord>();
   const terms: string[] = [];
   for (const target of pages) {
+    // Originals are verbatim quotes, not entities — their titles are full
+    // sentences that legitimately repeat across prose. Skip as targets.
+    if (target.kind === 'original') continue;
     const title = target.frontmatter.title || '';
     if (title.length < 4 || !/^[A-Z]/.test(title)) continue;
     if (blocklist.has(title.toLowerCase())) continue;
