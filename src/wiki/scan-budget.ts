@@ -45,7 +45,11 @@ function localDateString(now: Date, tz: string): string {
   return fmt.format(now); // "YYYY-MM-DD"
 }
 
-export function readBudget(vaultPath: string, now: Date, tz: string): ScanBudgetState {
+export function readBudget(
+  vaultPath: string,
+  now: Date,
+  tz: string,
+): ScanBudgetState {
   const file = budgetPath(vaultPath);
   const today = localDateString(now, tz);
   const fallback: ScanBudgetState = { date: today, spentUsd: 0, calls: 0 };

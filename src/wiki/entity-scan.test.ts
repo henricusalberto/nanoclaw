@@ -161,9 +161,9 @@ describe('prefilterWindow', () => {
   });
 
   it('rejects stopword-only exchanges', () => {
-    expect(
-      prefilterWindow(windowOf('ok thx lol yes sure bye')).accept,
-    ).toBe(false);
+    expect(prefilterWindow(windowOf('ok thx lol yes sure bye')).accept).toBe(
+      false,
+    );
   });
 
   it('rejects text with zero capitalized tokens', () => {
@@ -264,8 +264,7 @@ describe('runEntityScan end-to-end', () => {
           ],
           originals: [
             {
-              quote:
-                'I really think the whole retention funnel is upside down',
+              quote: 'I really think the whole retention funnel is upside down',
             },
           ],
         };
@@ -290,8 +289,6 @@ describe('runEntityScan end-to-end', () => {
       'Klaviyo',
       '', // original-thinking has empty name
     ]);
-    expect(
-      candidates.some((c) => c.kind === 'original-thinking'),
-    ).toBe(true);
+    expect(candidates.some((c) => c.kind === 'original-thinking')).toBe(true);
   });
 });

@@ -89,10 +89,7 @@ export function buildRow(input: {
  * to a single open file descriptor are atomic for small lines on POSIX
  * and we want zero-delay enqueue on the hot path.
  */
-export function enqueueMessage(
-  vaultPath: string,
-  row: EntityQueueRow,
-): void {
+export function enqueueMessage(vaultPath: string, row: EntityQueueRow): void {
   const file = entityQueuePath(vaultPath);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, JSON.stringify(row) + '\n');

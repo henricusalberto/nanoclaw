@@ -24,11 +24,7 @@ import {
   EntityScanConfig,
   readBridgeConfig,
 } from './bridge-config.js';
-import {
-  compactQueue,
-  EntityQueueRow,
-  readQueue,
-} from './entity-queue.js';
+import { compactQueue, EntityQueueRow, readQueue } from './entity-queue.js';
 import { atomicWriteFile } from './fs-util.js';
 import { appendWikiLogEvent } from './log.js';
 import { vaultPaths } from './paths.js';
@@ -183,7 +179,8 @@ function buildWindow(rows: EntityQueueRow[]): ConversationWindow {
 // Pre-filter (deterministic, no LLM)
 // =============================================================================
 
-const STOPWORD_ONLY_RE = /^[\s\p{P}\d]*$|^(ok|yes|no|lol|thx|thanks|k|sure|hi|hey|bye|\+1|\?+|!+)$/iu;
+const STOPWORD_ONLY_RE =
+  /^[\s\p{P}\d]*$|^(ok|yes|no|lol|thx|thanks|k|sure|hi|hey|bye|\+1|\?+|!+)$/iu;
 
 /**
  * Returns true if the window is rich enough to merit an LLM call. False
