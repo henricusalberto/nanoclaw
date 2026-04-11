@@ -139,7 +139,8 @@ export function projectHubs(
     // Pull the latest parsed body (post-related, post-timeline) from the
     // shared cache when available.
     const parsed =
-      opts.parsedByPath?.get(hubPage.filePath) ?? readWikiPage(hubPage.filePath);
+      opts.parsedByPath?.get(hubPage.filePath) ??
+      readWikiPage(hubPage.filePath);
 
     // Only rewrite blocks the hub template actually declares. This
     // prevents `home.md` — which has a smaller block set — from
@@ -261,30 +262,41 @@ function hasManagedBlock(body: string, markerName: string): boolean {
 // =============================================================================
 
 function byConfidenceDesc(a: VaultPageRecord, b: VaultPageRecord): number {
-  const ca = typeof a.frontmatter.confidence === 'number' ? a.frontmatter.confidence : 0;
-  const cb = typeof b.frontmatter.confidence === 'number' ? b.frontmatter.confidence : 0;
+  const ca =
+    typeof a.frontmatter.confidence === 'number' ? a.frontmatter.confidence : 0;
+  const cb =
+    typeof b.frontmatter.confidence === 'number' ? b.frontmatter.confidence : 0;
   if (cb !== ca) return cb - ca;
   return a.basename.localeCompare(b.basename);
 }
 
 function byRecencyDesc(a: VaultPageRecord, b: VaultPageRecord): number {
-  const ua = typeof a.frontmatter.updatedAt === 'string' ? a.frontmatter.updatedAt : '';
-  const ub = typeof b.frontmatter.updatedAt === 'string' ? b.frontmatter.updatedAt : '';
+  const ua =
+    typeof a.frontmatter.updatedAt === 'string' ? a.frontmatter.updatedAt : '';
+  const ub =
+    typeof b.frontmatter.updatedAt === 'string' ? b.frontmatter.updatedAt : '';
   if (ub !== ua) return ub.localeCompare(ua);
   return a.basename.localeCompare(b.basename);
 }
 
 function byHubPriorityDesc(a: VaultPageRecord, b: VaultPageRecord): number {
   const pa =
-    typeof a.frontmatter.hubPriority === 'number' ? a.frontmatter.hubPriority : 0;
+    typeof a.frontmatter.hubPriority === 'number'
+      ? a.frontmatter.hubPriority
+      : 0;
   const pb =
-    typeof b.frontmatter.hubPriority === 'number' ? b.frontmatter.hubPriority : 0;
+    typeof b.frontmatter.hubPriority === 'number'
+      ? b.frontmatter.hubPriority
+      : 0;
   if (pb !== pa) return pb - pa;
   return byRecencyDesc(a, b);
 }
 
 function isRecent(page: VaultPageRecord, now: Date): boolean {
-  const ua = typeof page.frontmatter.updatedAt === 'string' ? page.frontmatter.updatedAt : '';
+  const ua =
+    typeof page.frontmatter.updatedAt === 'string'
+      ? page.frontmatter.updatedAt
+      : '';
   if (!ua) return false;
   const t = Date.parse(ua);
   if (Number.isNaN(t)) return false;
@@ -331,8 +343,7 @@ function renderConcepts(pages: VaultPageRecord[]): string {
   }
   const lines: string[] = [];
   for (const p of pages) {
-    const title =
-      (p.frontmatter.title as string | undefined) || p.basename;
+    const title = (p.frontmatter.title as string | undefined) || p.basename;
     lines.push(`- [[${p.basename}|${title}]]`);
   }
   return lines.join('\n') + '\n';
@@ -370,8 +381,7 @@ function renderEntities(pages: VaultPageRecord[]): string {
     if (!bucket || bucket.length === 0) continue;
     lines.push(`**${kindLabels[kind] ?? capitalise(kind) + 's'}**`);
     for (const p of bucket) {
-      const title =
-        (p.frontmatter.title as string | undefined) || p.basename;
+      const title = (p.frontmatter.title as string | undefined) || p.basename;
       lines.push(`- [[${p.basename}|${title}]]`);
     }
     lines.push('');
@@ -415,8 +425,7 @@ function renderRecent(pages: VaultPageRecord[]): string {
   }
   const lines: string[] = [];
   for (const p of pages) {
-    const title =
-      (p.frontmatter.title as string | undefined) || p.basename;
+    const title = (p.frontmatter.title as string | undefined) || p.basename;
     const date =
       typeof p.frontmatter.updatedAt === 'string'
         ? p.frontmatter.updatedAt.slice(0, 10)
