@@ -77,7 +77,9 @@ export type LintCheckCode =
   | 'unknown-page-type'
   // Phase 6 — Anti-cramming + thinning length targets
   | 'page-length-cramming'
-  | 'page-length-thinning';
+  | 'page-length-thinning'
+  // Phase 6 — Writing tone standards
+  | 'writing-standards';
 
 export interface LintIssue {
   code: LintCheckCode;
@@ -489,6 +491,151 @@ function checkPageLength(page: PageRecord): LintIssue[] {
 }
 
 // =============================================================================
+// Phase 6: Writing tone standards
+// =============================================================================
+//
+// Warnings-only. Mirrors the style rules Janus's group CLAUDE.md
+// already encodes as instructions but which nothing enforced. Lint
+// coverage prevents drift on future writes without rewriting the
+// vault's current prose.
+//
+// Four rules:
+//   1. Em dashes (`—`) in prose. Use commas, colons, or periods.
+//   2. AI clichés — a small list of phrases that betray LLM-style
+//      prose. Case-insensitive word-boundary match.
+//   3. Direct quotes — count `"..."` blocks longer than 20 characters.
+//      Warn at 3+ per page. Encourage paraphrase + attribution.
+//   4. Themes-not-chronology — flag pages where >60% of `##` headings
+//      are date patterns. Diary-style pages should be in syntheses/,
+//      not as a general concept/person/project page.
+//
+// Exempt: originals/ (verbatim capture — never rewrite these),
+// sources/ (extractor output), syntheses/ (chronology IS the theme
+// there), reports/ (generated), hubs/ (managed blocks). Code fences
+// and inline code are stripped from the prose body before scanning.
+
+const AI_CLICHE_WORDS = [
+  'delve',
+  'tapestry',
+  'landscape',
+  'pivotal',
+  'fostering',
+  'garner',
+  'underscore',
+  'vibrant',
+  'interplay',
+  'intricate',
+  'crucial',
+  'showcase',
+  'genuine',
+  'deeply',
+  'truly',
+  'legendary',
+  'powerful',
+  'importantly',
+  'profound',
+];
+
+// Single compiled alternation regex. Word boundaries prevent matches
+// inside identifiers (e.g. `CrucialError`). Case-insensitive.
+const AI_CLICHE_RE = new RegExp(`\\b(${AI_CLICHE_WORDS.join('|')})\\b`, 'gi');
+
+// Match direct quotes of 20+ chars (not inline code).
+const DIRECT_QUOTE_RE = /"([^"\n]{20,})"/g;
+
+// Heading date heuristics: YYYY, YYYY-MM, or a month name.
+const DATE_HEADING_RE =
+  /^##\s+(?:\d{4}|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/im;
+
+const WRITING_STANDARDS_EXEMPT_KINDS = new Set<WikiPageKind>([
+  'original',
+  'source',
+  'synthesis',
+  'report',
+  'hub',
+]);
+
+function stripCodeBlocks(body: string): string {
+  return body
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\n]+`/g, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+}
+
+function checkWritingStandards(page: PageRecord): LintIssue[] {
+  if (WRITING_STANDARDS_EXEMPT_KINDS.has(page.expectedKind)) return [];
+  const issues: LintIssue[] = [];
+  const prose = stripCodeBlocks(page.body.replace(MANAGED_BLOCK_RE, ''));
+
+  // Rule 1: em dashes
+  if (prose.includes('—')) {
+    issues.push({
+      code: 'writing-standards',
+      severity: 'warning',
+      pagePath: page.relativePath,
+      message:
+        'prose contains em dash (—). Use commas, colons, or periods instead.',
+      context: { rule: 'em-dash' },
+    });
+  }
+
+  // Rule 2: AI clichés
+  const clicheHits = new Set<string>();
+  let m: RegExpExecArray | null;
+  AI_CLICHE_RE.lastIndex = 0;
+  while ((m = AI_CLICHE_RE.exec(prose)) !== null) {
+    clicheHits.add(m[1].toLowerCase());
+  }
+  if (clicheHits.size > 0) {
+    issues.push({
+      code: 'writing-standards',
+      severity: 'warning',
+      pagePath: page.relativePath,
+      message: `prose uses AI-cliché words: ${Array.from(clicheHits).sort().join(', ')}`,
+      context: { rule: 'ai-cliche', words: Array.from(clicheHits).sort() },
+    });
+  }
+
+  // Rule 3: direct-quote count
+  let quoteCount = 0;
+  DIRECT_QUOTE_RE.lastIndex = 0;
+  while ((m = DIRECT_QUOTE_RE.exec(prose)) !== null) quoteCount++;
+  if (quoteCount >= 3) {
+    issues.push({
+      code: 'writing-standards',
+      severity: 'warning',
+      pagePath: page.relativePath,
+      message: `page has ${quoteCount} direct quotes. Consider paraphrasing with inline attribution instead.`,
+      context: { rule: 'direct-quotes', count: quoteCount },
+    });
+  }
+
+  // Rule 4: themes-not-chronology — date-heading heuristic
+  const h2Lines = prose
+    .split('\n')
+    .filter((l) => /^##\s/.test(l.trim()))
+    .map((l) => l.trim());
+  if (h2Lines.length >= 3) {
+    const dateHeadings = h2Lines.filter((h) => DATE_HEADING_RE.test(h)).length;
+    if (dateHeadings / h2Lines.length > 0.6) {
+      issues.push({
+        code: 'writing-standards',
+        severity: 'warning',
+        pagePath: page.relativePath,
+        message: `${dateHeadings} of ${h2Lines.length} H2 headings are dates. Reorganize by theme; move chronological narrative to syntheses/.`,
+        context: {
+          rule: 'themes-not-chronology',
+          dateHeadings,
+          totalHeadings: h2Lines.length,
+        },
+      });
+    }
+  }
+
+  return issues;
+}
+
+// =============================================================================
 // Phase 1: Iron law of back-linking — unlinked-entity-mention
 // =============================================================================
 
@@ -761,6 +908,7 @@ export async function lintWiki(vaultPath: string): Promise<LintResult> {
     allIssues.push(...checkTimelineAttribution(p));
     allIssues.push(...checkUnlinkedMentions(p, mentionIndex));
     allIssues.push(...checkPageLength(p));
+    allIssues.push(...checkWritingStandards(p));
   }
   allIssues.push(...checkDuplicateIds(pages));
   allIssues.push(...checkClaimConflicts(pages));
