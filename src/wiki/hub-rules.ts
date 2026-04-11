@@ -18,12 +18,18 @@
 import { WikiPageFrontmatter, WikiPageKind } from './markdown.js';
 
 export type HubSlug =
+  // Six life-domain hubs — the top-level portal on home.md
   | 'businesses'
   | 'meta-ads'
   | 'playbooks'
   | 'systems'
   | 'people'
-  | 'me';
+  | 'me'
+  // Domain-specific hubs for areas Maurizio spends a lot of time on.
+  // These appear inside hubs/businesses.md as linked sub-domains, not
+  // on the home portal bar.
+  | 'pinterest'
+  | 'coaching';
 
 export interface HubRuleInput {
   basename: string;
@@ -276,6 +282,8 @@ function isKnownHub(s: string): boolean {
     s === 'systems' ||
     s === 'people' ||
     s === 'me' ||
-    s === 'home'
+    s === 'home' ||
+    s === 'pinterest' ||
+    s === 'coaching'
   );
 }

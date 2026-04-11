@@ -50,6 +50,8 @@ const VALID_HUBS = new Set([
   'systems',
   'businesses',
   'me',
+  'pinterest',
+  'coaching',
   'none',
 ]);
 
@@ -250,8 +252,7 @@ export async function classifyBookmarks(
 
       const validSections = hubSectionMap[hub] ?? [];
       const hubSection =
-        decision.hubSection &&
-        validSections.includes(decision.hubSection)
+        decision.hubSection && validSections.includes(decision.hubSection)
           ? decision.hubSection
           : 'everything-else';
 
@@ -355,9 +356,13 @@ function buildClassifierPrompt(hubSectionMap: HubSectionMap): string {
   const taxonomyLines: string[] = ['', 'Section taxonomy (per hub):'];
   for (const [hub, sections] of Object.entries(hubSectionMap)) {
     if (sections.length === 0) {
-      taxonomyLines.push(`  - ${hub}: (no sub-sections yet, always use "everything-else")`);
+      taxonomyLines.push(
+        `  - ${hub}: (no sub-sections yet, always use "everything-else")`,
+      );
     } else {
-      taxonomyLines.push(`  - ${hub}: ${sections.map((s) => `"${s}"`).join(', ')}, "everything-else"`);
+      taxonomyLines.push(
+        `  - ${hub}: ${sections.map((s) => `"${s}"`).join(', ')}, "everything-else"`,
+      );
     }
   }
   taxonomyLines.push(
