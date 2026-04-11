@@ -36,9 +36,16 @@ async function main(): Promise<void> {
   args.push('-e', 'NODE_PATH=/app/node_modules');
   args.push('--entrypoint', '/bin/bash');
   args.push('nanoclaw-agent:latest');
+  // Default: classify unclassified bookmarks only (idempotent).
+  // Pass --reclassify-sections as an argv flag to run the one-shot
+  // backfill over already-classified bookmarks to add hubSection tags
+  // after introducing sub-sections.
+  const reclassify = process.argv.includes('--reclassify-sections')
+    ? ' --reclassify-sections'
+    : '';
   args.push(
     '-c',
-    'cd /workspace/project && node dist/wiki/cli.js classify-bookmarks /workspace/wiki-inbox/wiki --apply',
+    `cd /workspace/project && node dist/wiki/cli.js classify-bookmarks /workspace/wiki-inbox/wiki --apply${reclassify}`,
   );
 
   console.log('Running bookmark classifier inside container...');

@@ -38,6 +38,7 @@ import { applyMigrationPlan, buildMigrationPlan } from './migrate-vault.js';
 import { invokeOperation, listOperations } from './operations.js';
 import { vaultPaths } from './paths.js';
 import { runQuery } from './query.js';
+import { proposeSections } from './section-proposer.js';
 import { resolveForVault } from './resolver.js';
 import { resolveSlug } from './slug-resolver.js';
 import {
@@ -153,6 +154,7 @@ async function main(): Promise<void> {
     'op',
     'query',
     'apply-split',
+    'apply-sections',
   ]);
   const isSubcommandHost = SUBCOMMAND_HOSTS.has(cmd ?? '');
   const vaultArg = isSubcommandHost ? undefined : positional[0];
@@ -809,6 +811,77 @@ async function main(): Promise<void> {
         }
       }
       return;
+    }
+    case 'propose-sections': {
+      const dryRun = flags.includes('--dry-run');
+      console.log(
+        `Section proposer: ${vaultPath}${dryRun ? ' (DRY RUN)' : ''}`,
+      );
+      const result = await proposeSections({
+        vaultPath,
+        budget: DEFAULT_DREAM_BUDGET_CONFIG,
+        now: new Date(),
+        dryRun,
+      });
+      console.log('');
+      console.log(`Hubs scanned:          ${result.hubsScanned}`);
+      console.log(`Hubs above threshold:  ${result.hubsAboveThreshold}`);
+      console.log(`Proposals written:     ${result.proposalsWritten}`);
+      if (result.budgetBlocked) {
+        console.log('Budget blocked: tier-2 cap reached mid-run.');
+      }
+      if (result.errors.length > 0) {
+        console.log(`Errors: ${result.errors.length}`);
+        for (const e of result.errors) console.log(`  ${e.hub}: ${e.message}`);
+      }
+      return;
+    }
+    case 'apply-sections': {
+      const hubSlug = positional[0];
+      if (!hubSlug) {
+        console.error(
+          'apply-sections requires a hub slug, e.g. `wiki apply-sections meta-ads`',
+        );
+        process.exit(2);
+      }
+      const proposedPath = path.join(
+        vaultPath,
+        '.openclaw-wiki',
+        'enrichment',
+        'hubs',
+        hubSlug,
+        'sections-proposal.md',
+      );
+      if (!fs.existsSync(proposedPath)) {
+        console.error(
+          `apply-sections: no proposal found at ${proposedPath}`,
+        );
+        console.error(
+          'Generate one first via `wiki propose-sections`, then retry.',
+        );
+        process.exit(3);
+      }
+      console.error(
+        `apply-sections for "${hubSlug}": NOT YET IMPLEMENTED. The proposal exists at:`,
+      );
+      console.error(`  ${proposedPath}`);
+      console.error('');
+      console.error(
+        'Applying a section proposal rewrites the hub page (adds new H3',
+      );
+      console.error(
+        'headers + managed-block markers) and then re-runs the bookmark',
+      );
+      console.error(
+        'classifier to re-route the Everything-else bucket into the new',
+      );
+      console.error(
+        'sub-sections. That requires human review — open the proposal,',
+      );
+      console.error(
+        'judge the suggested sections, then apply them manually for now.',
+      );
+      process.exit(2);
     }
     case 'apply-split': {
       const slug = positional[0];
