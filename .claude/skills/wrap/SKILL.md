@@ -97,10 +97,45 @@ Rules:
 
 That's it. Don't re-run builds, don't re-run the compile, don't try to do anything else unless the user asks. `/wrap` is pure capture.
 
+## Business and System READMEs
+
+When a session materially changed the state of a business or system (shipped a feature, resolved a blocker, changed a metric, paused work), also update that business's `## Current State` and `## Handoff` blocks in its README. These live at OpenClaw workspace paths on the host, directly accessible from Claude Code (no mount required):
+
+**Businesses** (`~/.openclaw/workspace/BUSINESSES/`):
+- Pinterest:    `~/.openclaw/workspace/BUSINESSES/pinterest-store/README.md`
+- Coaching:     `~/.openclaw/workspace/BUSINESSES/coaching/README.md`
+- Revive Plus:  `~/.openclaw/workspace/BUSINESSES/reviveplus/README.md`
+- Ops Hub:      `~/.openclaw/workspace/BUSINESSES/ops-hub/README.md`
+
+**Systems** (`~/.openclaw/workspace/SYSTEMS/`):
+- Finance:          `~/.openclaw/workspace/SYSTEMS/finance/README.md`
+- Planning System:  `~/.openclaw/workspace/SYSTEMS/planning-system/README.md`
+
+**Current State block** — the right-now snapshot:
+- Status line (🟢 active / 🟡 blocked / 🔴 paused)
+- Key metrics (revenue, ROAS, open issues, whatever is relevant)
+- Blockers
+- Next action
+- `_Updated: YYYY-MM-DD CET_` on the first line under the heading
+
+**Handoff block** — what the last session did:
+- `_Last worked by: Claude Code — YYYY-MM-DD_` line
+- **Status:** paragraph describing what this session accomplished
+- **Next:** numbered list of concrete next actions
+- **Blockers:** anything waiting on external dependency
+
+Janus updates the same files from inside containers via the `container/skills/session-wrap` skill. Both agents write to the same place, so handoffs are bidirectional. Don't create empty stubs; if a README doesn't exist yet, mention the gap in the wrap memory file's "Open threads" section instead.
+
+Also update the shared workspace-root files at `~/.openclaw/workspace/` when relevant:
+- `LEARNINGS.md` — durable insights that apply across businesses
+- `ERRORS.md` — bugs hit and how they were fixed
+- `FEATURE_REQUESTS.md` — things the user asked for that aren't built yet
+
+Append dated entries. Don't rewrite existing ones.
+
 ## What `/wrap` does NOT do
 
 - **Does not touch `~/.claude/projects/-Users-kimbehnke--nanoclaw-nanoclaw/memory/`**. That directory is managed by Claude Code's own auto-memory system and holds living typed documents (user profile, feedback rules, project state). It has a different purpose and different schema. The wiki bridge picks those files up separately via the `claude-code-auto-memory` source.
-- **Does not update business READMEs.** The container `session-wrap` skill does that for Janus because Janus runs in the main group with write access to `BUSINESSES/<name>/README.md`. Claude Code sessions typically don't touch business state files. If the session did modify a business README, mention the path in the "Files touched" section; don't write the handoff block from the wrap skill itself.
 - **Does not run the bridge or compile.** The next scheduled bridge run (or container spawn) will pick up the new memory file automatically. If the user wants it in the wiki immediately, they can run `node dist/wiki/cli.js bridge` themselves.
 - **Does not commit.** Memory files under `groups/global/memory/` are gitignored (see `.gitignore` line 17: `groups/global/*`). They live on the local filesystem only. No commit is possible or needed.
 
