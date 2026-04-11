@@ -74,7 +74,10 @@ export type LintCheckCode =
   | 'unlinked-entity-mention'
   | 'timeline-missing-attribution'
   // Phase 3 — MECE taxonomy
-  | 'unknown-page-type';
+  | 'unknown-page-type'
+  // Phase 6 — Anti-cramming + thinning length targets
+  | 'page-length-cramming'
+  | 'page-length-thinning';
 
 export interface LintIssue {
   code: LintCheckCode;
@@ -420,6 +423,72 @@ function checkTimelineAttribution(page: PageRecord): LintIssue[] {
 }
 
 // =============================================================================
+// Phase 6: Anti-cramming + thinning — page-length-target
+// =============================================================================
+//
+// Flags pages that have drifted way outside the target length for their
+// kind. Cramming (>1.25× ceiling) signals a page accumulating multiple
+// themes that should probably be split into focused children. Thinning
+// (<0.5× floor) signals a stub that should either be enriched or merged.
+//
+// Targets are intentionally generous — the rule fires on real outliers,
+// not honest length variation. Length counts prose lines only: strip
+// frontmatter and managed blocks first, then count lines with
+// non-whitespace content.
+//
+// Kinds without length expectations (hub, original, source, report,
+// inbox-item) are exempt. Hub bodies are almost entirely managed blocks,
+// originals are verbatim capture, sources are extractor output, reports
+// are generated, inbox-items are triage stubs.
+
+const LENGTH_TARGETS: Partial<
+  Record<WikiPageKind, { floor: number; ceiling: number }>
+> = {
+  person: { floor: 20, ceiling: 80 },
+  company: { floor: 20, ceiling: 60 },
+  project: { floor: 30, ceiling: 80 },
+  concept: { floor: 20, ceiling: 80 },
+  deal: { floor: 20, ceiling: 50 },
+  synthesis: { floor: 60, ceiling: 120 },
+};
+
+// Match any Openclaw-managed block so it can be stripped before counting
+// prose lines. Mirrors the pattern used in hub-projection.ts.
+const MANAGED_BLOCK_RE =
+  /<!--\s*openclaw:wiki:[a-z-]+:start\s*-->[\s\S]*?<!--\s*openclaw:wiki:[a-z-]+:end\s*-->/g;
+
+function countProseLines(body: string): number {
+  // Strip any managed blocks first; they're generated, not authored.
+  const stripped = body.replace(MANAGED_BLOCK_RE, '');
+  return stripped.split('\n').filter((l) => l.trim().length > 0).length;
+}
+
+function checkPageLength(page: PageRecord): LintIssue[] {
+  const target = LENGTH_TARGETS[page.expectedKind];
+  if (!target) return [];
+  const lines = countProseLines(page.body);
+  const issues: LintIssue[] = [];
+  if (lines > target.ceiling * 1.25) {
+    issues.push({
+      code: 'page-length-cramming',
+      severity: 'warning',
+      pagePath: page.relativePath,
+      message: `page has ${lines} prose lines (target ${target.floor}–${target.ceiling}). Consider splitting into focused children.`,
+      context: { lines, floor: target.floor, ceiling: target.ceiling },
+    });
+  } else if (lines < target.floor * 0.5) {
+    issues.push({
+      code: 'page-length-thinning',
+      severity: 'warning',
+      pagePath: page.relativePath,
+      message: `page has ${lines} prose lines (target ${target.floor}–${target.ceiling}). Consider enriching or merging into a richer page.`,
+      context: { lines, floor: target.floor, ceiling: target.ceiling },
+    });
+  }
+  return issues;
+}
+
+// =============================================================================
 // Phase 1: Iron law of back-linking — unlinked-entity-mention
 // =============================================================================
 
@@ -691,6 +760,7 @@ export async function lintWiki(vaultPath: string): Promise<LintResult> {
     allIssues.push(...checkClaimAttribution(p));
     allIssues.push(...checkTimelineAttribution(p));
     allIssues.push(...checkUnlinkedMentions(p, mentionIndex));
+    allIssues.push(...checkPageLength(p));
   }
   allIssues.push(...checkDuplicateIds(pages));
   allIssues.push(...checkClaimConflicts(pages));
