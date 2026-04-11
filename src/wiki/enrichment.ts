@@ -19,6 +19,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { atomicWriteFile } from './fs-util.js';
+import { countProseLines, LENGTH_TARGETS } from './lint.js';
 import { extractWikiLinks, getPageTitle } from './markdown.js';
 import { vaultPaths } from './paths.js';
 import {
@@ -170,6 +171,40 @@ export function selectThinPages(
       candidates.push({
         page,
         reason: `confidence=${confidence} below floor ${confidenceFloor}`,
+      });
+    }
+  }
+  return candidates;
+}
+
+/**
+ * Identify crammed candidates — pages whose prose length exceeds
+ * 1.25× the ceiling for their kind. These are candidates for the
+ * Tier 2 split proposal prompt (implemented separately; this function
+ * is the gate).
+ *
+ * Reuses `LENGTH_TARGETS` and `countProseLines` from lint.ts so the
+ * policy stays in one place. Pages of kinds without a length target
+ * (hubs, originals, sources, reports) are never candidates.
+ *
+ * Returns candidates with a `reason` of `cramming: N lines (target
+ * F-C)` so downstream code / shadow proposals can quote the exact
+ * trigger.
+ */
+export function selectCrammedPages(
+  pages: VaultPageRecord[],
+): EnrichmentCandidate[] {
+  const candidates: EnrichmentCandidate[] = [];
+  for (const page of pages) {
+    const kind = page.kind ?? page.expectedKind;
+    if (!kind) continue;
+    const target = LENGTH_TARGETS[kind];
+    if (!target) continue;
+    const lines = countProseLines(page.body);
+    if (lines > target.ceiling * 1.25) {
+      candidates.push({
+        page,
+        reason: `cramming: ${lines} prose lines (target ${target.floor}–${target.ceiling})`,
       });
     }
   }
@@ -693,4 +728,108 @@ function selectNeighbours(
     }
   }
   return out;
+}
+
+// =============================================================================
+// Phase 6: split-proposal shadow writer
+// =============================================================================
+//
+// When a Tier 2 cramming pass produces a split proposal (a parent
+// summary + N children), we write it to
+// `.openclaw-wiki/enrichment/<slug>/split-proposal.md` for the human
+// to review before `wiki apply-split` rewrites the live page.
+//
+// No side effects on vault content — this is a write into the state
+// directory only.
+
+export interface SplitProposalChild {
+  slug: string;
+  title: string;
+  kind: string;
+  body: string;
+  sourceLines?: string;
+}
+
+export interface SplitProposal {
+  shouldSplit: boolean;
+  reason: string;
+  parentSummary: string;
+  children: SplitProposalChild[];
+}
+
+export function writeSplitShadowProposal(params: {
+  vaultPath: string;
+  page: VaultPageRecord;
+  proposal: SplitProposal;
+}): string {
+  const slug = params.page.basename;
+  const dir = path.join(
+    vaultPaths(params.vaultPath).stateDir,
+    'enrichment',
+    slug,
+  );
+  fs.mkdirSync(dir, { recursive: true });
+  const proposedPath = path.join(dir, 'split-proposal.md');
+
+  const lines: string[] = [];
+  lines.push(
+    `# Split proposal for ${params.page.frontmatter.title ?? slug}`,
+  );
+  lines.push('');
+  lines.push(
+    `_Generated at ${new Date().toISOString()}. Review and apply manually with \`wiki apply-split ${slug}\`._`,
+  );
+  lines.push('');
+  lines.push(`**Source page:** \`${params.page.relativePath}\``);
+  lines.push('');
+  lines.push(`**Should split:** ${params.proposal.shouldSplit ? 'yes' : 'no'}`);
+  lines.push('');
+  lines.push(`**Reason:** ${params.proposal.reason}`);
+  lines.push('');
+
+  if (!params.proposal.shouldSplit || params.proposal.children.length === 0) {
+    lines.push(
+      '_No split recommended. Parent page left alone; no child pages proposed._',
+    );
+    lines.push('');
+  } else {
+    lines.push('## Proposed parent rewrite');
+    lines.push('');
+    lines.push(
+      '_This will replace the parent page body. Claims, frontmatter, and managed blocks are preserved automatically by `apply-split`._',
+    );
+    lines.push('');
+    lines.push('```markdown');
+    lines.push(params.proposal.parentSummary.trim());
+    lines.push('```');
+    lines.push('');
+
+    lines.push(`## Proposed ${params.proposal.children.length} new child pages`);
+    lines.push('');
+    for (const child of params.proposal.children) {
+      lines.push(`### ${child.title}`);
+      lines.push('');
+      lines.push(`- **New slug:** \`${child.slug}\``);
+      lines.push(`- **Kind:** \`${child.kind}\``);
+      if (child.sourceLines) {
+        lines.push(`- **From parent section:** ${child.sourceLines}`);
+      }
+      lines.push('');
+      lines.push('```markdown');
+      lines.push(child.body.trim());
+      lines.push('```');
+      lines.push('');
+    }
+  }
+
+  lines.push('---');
+  lines.push('');
+  lines.push(
+    '_To apply this proposal, run_ `wiki apply-split ' +
+      slug +
+      '` _from the repo root. The stub currently exits with "not yet implemented" pending daylight review._',
+  );
+
+  atomicWriteFile(proposedPath, lines.join('\n'));
+  return proposedPath;
 }

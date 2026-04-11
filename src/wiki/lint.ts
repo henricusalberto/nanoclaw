@@ -443,7 +443,7 @@ function checkTimelineAttribution(page: PageRecord): LintIssue[] {
 // originals are verbatim capture, sources are extractor output, reports
 // are generated, inbox-items are triage stubs.
 
-const LENGTH_TARGETS: Partial<
+export const LENGTH_TARGETS: Partial<
   Record<WikiPageKind, { floor: number; ceiling: number }>
 > = {
   person: { floor: 20, ceiling: 80 },
@@ -459,7 +459,7 @@ const LENGTH_TARGETS: Partial<
 const MANAGED_BLOCK_RE =
   /<!--\s*openclaw:wiki:[a-z-]+:start\s*-->[\s\S]*?<!--\s*openclaw:wiki:[a-z-]+:end\s*-->/g;
 
-function countProseLines(body: string): number {
+export function countProseLines(body: string): number {
   // Strip any managed blocks first; they're generated, not authored.
   const stripped = body.replace(MANAGED_BLOCK_RE, '');
   return stripped.split('\n').filter((l) => l.trim().length > 0).length;

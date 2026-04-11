@@ -335,6 +335,151 @@ export async function runTier3(ctx: TierPromptContext): Promise<TierResult> {
   }
 }
 
+// =============================================================================
+// Tier 2 split — cramming candidates only. Sonnet reads the long page
+// and returns a split proposal: a short parent summary + N focused
+// children. Infrastructure only — actually running this is gated by
+// the cramming lint rule and is not part of the overnight plan.
+// =============================================================================
+
+export interface Tier2SplitChild {
+  slug: string;
+  title: string;
+  kind: string;
+  body: string;
+  sourceLines?: string;
+}
+
+export interface Tier2SplitResult {
+  shouldSplit: boolean;
+  reason: string;
+  parentSummary: string;
+  children: Tier2SplitChild[];
+}
+
+const TIER2_SPLIT_PROMPT = `You are reviewing a personal wiki page that has grown too long and probably covers multiple themes that should each be their own page. Your job is to propose a split: a short "parent summary" that replaces the bloated body, plus N focused children, each carrying one theme.
+
+Read the full body + existing claims + neighbour list below, then return a JSON object with exactly these fields:
+{
+  "shouldSplit": boolean,
+  "reason": "one sentence on why split or why not",
+  "parentSummary": "full markdown replacement body for the parent page. Keep it under 40 lines. Start with the original intro (if any), then a short 'See also' list linking to the new children via [[child-slug|Title]]. Do NOT include frontmatter, managed blocks, or any ## Timeline section — the apply step preserves those.",
+  "children": [
+    {
+      "slug": "kebab-case-slug",
+      "title": "Human title",
+      "kind": "concept | person | project | philosophy | pattern | decision | tension | synthesis",
+      "body": "full markdown for the new child page, no frontmatter",
+      "sourceLines": "rough quote of which H2 section of the parent this came from, for audit"
+    }
+  ]
+}
+
+CONSTRAINTS:
+- Conservative default: shouldSplit=false if the page is a legitimately long synthesis or a deliberate index. Only propose a split when the page contains 2+ clearly unrelated themes.
+- Never invent facts. All child page content must come from the parent body.
+- Each child must be ~40-100 lines of prose. A child that's only 5 lines should not exist — merge it back.
+- Child slugs must be unique kebab-case and descriptive.
+- If shouldSplit=false, children can be an empty array and parentSummary can be the original body unchanged.
+
+Return ONLY the JSON object, no prose, no code fence.`;
+
+const TIER2_SPLIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    shouldSplit: { type: 'boolean' },
+    reason: { type: 'string' },
+    parentSummary: { type: 'string' },
+    children: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          slug: { type: 'string' },
+          title: { type: 'string' },
+          kind: { type: 'string' },
+          body: { type: 'string' },
+          sourceLines: { type: 'string' },
+        },
+        required: ['slug', 'title', 'kind', 'body'],
+      },
+    },
+  },
+  required: ['shouldSplit', 'reason', 'parentSummary', 'children'],
+};
+
+const EMPTY_SPLIT: Tier2SplitResult = {
+  shouldSplit: false,
+  reason: 'Sonnet call failed or returned unparseable JSON',
+  parentSummary: '',
+  children: [],
+};
+
+export async function runTier2Split(
+  ctx: TierPromptContext,
+): Promise<Tier2SplitResult> {
+  const prompt = [
+    TIER2_SPLIT_PROMPT,
+    '',
+    `# Page: ${ctx.pageTitle} (${ctx.pageKind})`,
+    '',
+    '## Existing claims',
+    JSON.stringify(ctx.existingClaims, null, 2).slice(0, 4000),
+    '',
+    '## Body',
+    ctx.existingBody.slice(0, 20000),
+    '',
+    '## Neighbours',
+    ctx.neighbours
+      .slice(0, 40)
+      .map((n) => `- ${n.title} (${n.kind})`)
+      .join('\n'),
+  ].join('\n');
+
+  try {
+    const { json } = await callClaudeCli({
+      prompt,
+      model: TIER_MODEL[2] ?? 'claude-sonnet-4-5',
+      jsonSchema: TIER2_SPLIT_SCHEMA,
+      timeoutMs: 240_000,
+    });
+    const parsed = (json ?? {}) as Partial<Tier2SplitResult>;
+    const childrenRaw = Array.isArray(parsed.children)
+      ? (parsed.children as unknown[])
+      : [];
+    const children: Tier2SplitChild[] = childrenRaw
+      .filter(
+        (c): c is Record<string, unknown> =>
+          !!c && typeof c === 'object' && !Array.isArray(c),
+      )
+      .map((c) => ({
+        slug: typeof c.slug === 'string' ? c.slug : '',
+        title: typeof c.title === 'string' ? c.title : '',
+        kind: typeof c.kind === 'string' ? c.kind : 'concept',
+        body: typeof c.body === 'string' ? c.body : '',
+        sourceLines:
+          typeof c.sourceLines === 'string' ? c.sourceLines : undefined,
+      }))
+      .filter((c) => c.slug && c.title && c.body);
+    return {
+      shouldSplit: parsed.shouldSplit === true,
+      reason:
+        typeof parsed.reason === 'string'
+          ? parsed.reason
+          : 'no reason provided',
+      parentSummary:
+        typeof parsed.parentSummary === 'string' ? parsed.parentSummary : '',
+      children,
+    };
+  } catch (err) {
+    logger.warn(
+      { err: String(err), page: ctx.pageTitle },
+      'dream-cycle: tier-2-split call failed',
+    );
+    return EMPTY_SPLIT;
+  }
+}
+
 function stringArray(v: unknown): string[] {
   return Array.isArray(v)
     ? v.filter((x): x is string => typeof x === 'string')

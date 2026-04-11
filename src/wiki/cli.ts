@@ -146,7 +146,14 @@ async function main(): Promise<void> {
   // Some commands take a subcommand as their first positional rather
   // than a vault path. For those, treat positional[0] as the subcommand
   // and skip the vault arg entirely (always uses the default vault).
-  const SUBCOMMAND_HOSTS = new Set(['graph', 'slug', 'volume', 'op', 'query']);
+  const SUBCOMMAND_HOSTS = new Set([
+    'graph',
+    'slug',
+    'volume',
+    'op',
+    'query',
+    'apply-split',
+  ]);
   const isSubcommandHost = SUBCOMMAND_HOSTS.has(cmd ?? '');
   const vaultArg = isSubcommandHost ? undefined : positional[0];
   const vaultPath = path.resolve(vaultArg || DEFAULT_VAULT);
@@ -799,15 +806,54 @@ async function main(): Promise<void> {
       }
       return;
     }
+    case 'apply-split': {
+      const slug = positional[0];
+      if (!slug) {
+        console.error(
+          'apply-split requires a page slug, e.g. `wiki apply-split ecom-product-development`',
+        );
+        process.exit(2);
+      }
+      const proposedPath = path.join(
+        vaultPath,
+        '.openclaw-wiki',
+        'enrichment',
+        slug,
+        'split-proposal.md',
+      );
+      if (!fs.existsSync(proposedPath)) {
+        console.error(
+          `apply-split: no split proposal found at ${proposedPath}`,
+        );
+        console.error(
+          'Generate one first via the dream cycle cramming pass, then retry.',
+        );
+        process.exit(3);
+      }
+      console.error(
+        `apply-split for "${slug}": NOT YET IMPLEMENTED. The proposal exists at:`,
+      );
+      console.error(`  ${proposedPath}`);
+      console.error('');
+      console.error(
+        'Applying a split rewrites the parent page body, creates N child pages in',
+      );
+      console.error(
+        'the appropriate kind directories, and rewrites inbound wikilinks. That',
+      );
+      console.error(
+        "surgery requires human review — review the shadow proposal and wire up",
+      );
+      console.error('the apply path in daylight before running it.');
+      process.exit(2);
+    }
     case 'query': {
       // Positional question or --question flag. If no question is
       // given, we search for the rest of argv joined with spaces to
       // allow natural shell usage: `wiki query what's Dom's method?`.
       const explicit = getFlagValue(flags, args, '--question');
       const positionalQuestion =
-        positional.length > 0
-          ? positional.join(' ').trim()
-          : '';
+        positional.length > 0 ? positional.join(' ').trim() : '';
       const question = (explicit ?? positionalQuestion).trim();
       if (!question) {
         console.error(
