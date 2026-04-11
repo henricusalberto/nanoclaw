@@ -102,7 +102,7 @@ That's it. Don't re-run builds, don't re-run the compile, don't try to do anythi
 - **Does not touch `~/.claude/projects/-Users-kimbehnke--nanoclaw-nanoclaw/memory/`**. That directory is managed by Claude Code's own auto-memory system and holds living typed documents (user profile, feedback rules, project state). It has a different purpose and different schema. The wiki bridge picks those files up separately via the `claude-code-auto-memory` source.
 - **Does not update business READMEs.** The container `session-wrap` skill does that for Janus because Janus runs in the main group with write access to `BUSINESSES/<name>/README.md`. Claude Code sessions typically don't touch business state files. If the session did modify a business README, mention the path in the "Files touched" section; don't write the handoff block from the wrap skill itself.
 - **Does not run the bridge or compile.** The next scheduled bridge run (or container spawn) will pick up the new memory file automatically. If the user wants it in the wiki immediately, they can run `node dist/wiki/cli.js bridge` themselves.
-- **Does not commit.** Memory files under `groups/global/memory/` are tracked in git but committing them is the user's call, not the wrap skill's.
+- **Does not commit.** Memory files under `groups/global/memory/` are gitignored (see `.gitignore` line 17: `groups/global/*`). They live on the local filesystem only. No commit is possible or needed.
 
 ## If you switch back to OpenClaw
 
