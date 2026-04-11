@@ -842,7 +842,7 @@ async function main(): Promise<void> {
         'the appropriate kind directories, and rewrites inbound wikilinks. That',
       );
       console.error(
-        "surgery requires human review — review the shadow proposal and wire up",
+        'surgery requires human review — review the shadow proposal and wire up',
       );
       console.error('the apply path in daylight before running it.');
       process.exit(2);

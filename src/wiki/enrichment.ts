@@ -772,9 +772,7 @@ export function writeSplitShadowProposal(params: {
   const proposedPath = path.join(dir, 'split-proposal.md');
 
   const lines: string[] = [];
-  lines.push(
-    `# Split proposal for ${params.page.frontmatter.title ?? slug}`,
-  );
+  lines.push(`# Split proposal for ${params.page.frontmatter.title ?? slug}`);
   lines.push('');
   lines.push(
     `_Generated at ${new Date().toISOString()}. Review and apply manually with \`wiki apply-split ${slug}\`._`,
@@ -804,7 +802,9 @@ export function writeSplitShadowProposal(params: {
     lines.push('```');
     lines.push('');
 
-    lines.push(`## Proposed ${params.proposal.children.length} new child pages`);
+    lines.push(
+      `## Proposed ${params.proposal.children.length} new child pages`,
+    );
     lines.push('');
     for (const child of params.proposal.children) {
       lines.push(`### ${child.title}`);

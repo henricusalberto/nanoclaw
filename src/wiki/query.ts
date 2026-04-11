@@ -41,9 +41,7 @@ export interface RunQueryResult {
   durationMs: number;
 }
 
-export async function runQuery(
-  input: RunQueryInput,
-): Promise<RunQueryResult> {
+export async function runQuery(input: RunQueryInput): Promise<RunQueryResult> {
   const startedAt = Date.now();
   const now = input.now ?? new Date();
   const limit = input.limit ?? 20;
@@ -64,7 +62,12 @@ export async function runQuery(
   };
 
   if (input.save) {
-    const savedPath = writeQueryReport(input.vaultPath, input.question, results, now);
+    const savedPath = writeQueryReport(
+      input.vaultPath,
+      input.question,
+      results,
+      now,
+    );
     out.savedPath = savedPath;
   }
 
@@ -113,11 +116,15 @@ function writeQueryReport(
   const body: string[] = [];
   body.push(`# Query: ${question}`);
   body.push('');
-  body.push(`_Ran ${now.toISOString()}. ${results.length} result${results.length === 1 ? '' : 's'}._`);
+  body.push(
+    `_Ran ${now.toISOString()}. ${results.length} result${results.length === 1 ? '' : 's'}._`,
+  );
   body.push('');
 
   if (results.length === 0) {
-    body.push('No matching pages found. Try different keywords or a broader search term.');
+    body.push(
+      'No matching pages found. Try different keywords or a broader search term.',
+    );
     body.push('');
   } else {
     body.push('## Matching pages');
