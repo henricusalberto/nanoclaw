@@ -490,6 +490,62 @@ Found: N contradictions, N orphans, N missing entity pages. Auto-fixed: N. Await
 
 Don't auto-fix anything that requires Maurizio's judgment. Auto-fix only mechanical things (broken cross-reference paths, index entries for renamed files, missing log entries).
 
+## Historical message archive import
+
+Ported from farza's gbrain / llm-wiki. The `wiki import` subcommand reads local SQLite archives directly (iMessage, WhatsApp) and writes one raw source page per `(contact, day)` into `sources/`. Raw entries are immutable after write — Janus and the dream cycle absorb them into structured entity pages on subsequent runs, but the raw files themselves never get rewritten.
+
+**macOS only.** Requires Full Disk Access granted to the terminal or launchd process running the command (System Settings → Privacy & Security → Full Disk Access). The command surfaces an actionable error if FDA is missing.
+
+**iMessage** (`wiki import imessage`):
+- Reads `~/Library/Messages/chat.db`
+- Resolves phone numbers and emails to names via every macOS AddressBook SQLite file found under `~/Library/Application Support/AddressBook/`
+- Filters to direct messages only (excludes group chats)
+- Extracts text from `attributedBody` when `text` is null (iOS 16+ schema)
+- Skips tapback reactions ("Liked...", "Loved...", etc.)
+- Groups by (contact, day); days with fewer than 2 messages are dropped
+- Flags: `--since YYYY-MM-DD` (default 2016-01-01), `--top N` (default 100), `--min-msg-len N` (default 15), `--your-name "..."` (default "Me"), `--apply`
+
+**WhatsApp** (`wiki import whatsapp`):
+- Reads `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`
+- Requires WhatsApp Desktop installed and synced at least once
+- Filters to direct messages only (JIDs ending in `@g.us` are group chats, excluded)
+- Groups by (contact, day); days with fewer than 2 messages are dropped
+- Flags: `--top N` (default 30), `--min-msg-len N` (default 15), `--your-name "..."`, `--apply`
+
+**Workflow for a fresh import:**
+
+1. **Dry-run first** with a narrow slice: `wiki import imessage --top 5 --since 2024-01-01` — no `--apply`. Inspects DB access, lists top contacts by volume, counts entries that *would* be written. Do this before every real run.
+2. **Apply a narrow slice:** add `--apply`. First run should be a small time window or small top-N so you can eyeball the generated source pages under `sources/imessage-*.md` or `sources/whatsapp-*.md`.
+3. **Expand gradually.** Widen `--since` or raise `--top` on subsequent runs. The ingest is idempotent — re-running with the same scope produces no new writes (timestamps excluded from the unchanged check).
+4. **Let the dream cycle absorb.** The next nightly run picks up the new source pages via the candidate-processor → entity-scan → tier enrichment pipeline. Don't manually read the raw entries — that's what the wiki is for.
+
+**What raw entries look like:**
+
+```markdown
+---
+id: source.imessage-dom-ingleston-2024-03-15
+pageType: source
+title: "iMessage with Dom Ingleston (2024-03-15)"
+sourceType: imessage
+participant: "Dom Ingleston"
+participantSlug: dom-ingleston
+date: 2024-03-15
+messageCount: 34
+ingestedAt: "2026-04-11T..."
+tags:
+  - imessage
+  - raw-message-archive
+---
+# iMessage with Dom Ingleston (2024-03-15)
+
+_Raw message archive entry — immutable after ingest. Do not edit by hand._
+
+**Dom Ingleston** (09:14:22): that creative angle for the powder ads, what if we lean into...
+**Me** (09:15:01): yeah I was thinking the same thing ...
+```
+
+**Do not edit raw entries.** If you spot something in a raw entry that should become a structured claim on `people/dom-ingleston.md`, add the claim to that entity page and cite the raw entry's `id` in the evidence block. The raw page stays frozen.
+
 ## Conventions
 
 - **Page filename:** lowercase-kebab.md (`maurizios-pinterest-system.md`, not `Maurizio's Pinterest System.md`).
@@ -527,6 +583,10 @@ Don't auto-fix anything that requires Maurizio's judgment. Auto-fix only mechani
 # Content ingestion
 wiki extract --url <url> | --file <path> | --bookmark-id <id>   # Unified extractor
 wiki bridge                                                      # Force-sync memory files into sources/
+
+# Historical message archive ingest (macOS only — needs Full Disk Access)
+wiki import imessage [--since 2016-01-01] [--top 100] [--min-msg-len 15] [--your-name "..."] [--apply]
+wiki import whatsapp [--top 30] [--min-msg-len 15] [--your-name "..."] [--apply]
 
 # Navigation + discovery
 wiki query "question text" --save                                # Ranked search + save to reports/queries/

@@ -32,6 +32,8 @@ import {
 import { installWikiHooks } from './install-hooks.js';
 import { ExtractorInput } from './extractors/base.js';
 import { getDefaultRegistry } from './extractors/registry.js';
+import { importImessage } from './ingesters/imessage.js';
+import { importWhatsapp } from './ingesters/whatsapp.js';
 import { lintWiki } from './lint.js';
 import { serializeWikiPage, WikiPageFrontmatter } from './markdown.js';
 import { applyMigrationPlan, buildMigrationPlan } from './migrate-vault.js';
@@ -129,6 +131,11 @@ const VALUE_FLAGS = new Set([
   '--tier',
   '--question',
   '--limit',
+  '--since',
+  '--top',
+  '--min-msg-len',
+  '--your-name',
+  '--vault',
 ]);
 
 async function main(): Promise<void> {
@@ -155,6 +162,7 @@ async function main(): Promise<void> {
     'query',
     'apply-split',
     'apply-sections',
+    'import',
   ]);
   const isSubcommandHost = SUBCOMMAND_HOSTS.has(cmd ?? '');
   const vaultArg = isSubcommandHost ? undefined : positional[0];
@@ -700,6 +708,100 @@ async function main(): Promise<void> {
       if (!apply && result.classified > 0) {
         console.log(
           '\n[DRY RUN] No files modified. Re-run with --apply to write.',
+        );
+      }
+      return;
+    }
+    case 'import': {
+      const source = positional[0];
+      const vaultFlag = getFlagValue(flags, args, '--vault');
+      const importVaultPath = path.resolve(vaultFlag || DEFAULT_VAULT);
+      if (!fs.existsSync(importVaultPath)) {
+        console.error(`import: vault not found at ${importVaultPath}`);
+        process.exit(2);
+      }
+      if (!source || (source !== 'imessage' && source !== 'whatsapp')) {
+        console.error(
+          'usage: wiki import <imessage|whatsapp> [--since YYYY-MM-DD]' +
+            ' [--top N] [--min-msg-len N] [--your-name "..."] [--apply]' +
+            ' [--vault path]',
+        );
+        process.exit(2);
+      }
+
+      const since = getFlagValue(flags, args, '--since') ?? '2016-01-01';
+      const topRaw = getFlagValue(flags, args, '--top');
+      const topN = topRaw ? Number(topRaw) : source === 'whatsapp' ? 30 : 100;
+      const minRaw = getFlagValue(flags, args, '--min-msg-len');
+      const minMessageLength = minRaw ? Number(minRaw) : 15;
+      const yourName = getFlagValue(flags, args, '--your-name') ?? 'Me';
+
+      console.log(
+        `Importing ${source} (${apply ? 'APPLY' : 'DRY RUN'}): ${importVaultPath}`,
+      );
+      console.log(`  since:          ${since}`);
+      console.log(`  topN:           ${topN}`);
+      console.log(`  minMessageLen:  ${minMessageLength}`);
+      console.log(`  yourName:       ${yourName}`);
+      console.log('');
+
+      if (source === 'imessage') {
+        const r = importImessage({
+          vaultPath: importVaultPath,
+          since,
+          topN,
+          minMessageLength,
+          yourName,
+          apply,
+        });
+        console.log('iMessage import result:');
+        console.log(`  platformOk:        ${r.platformOk}`);
+        console.log(`  permissionOk:      ${r.permissionOk}`);
+        console.log(`  contacts loaded:   ${r.contactCount}`);
+        console.log(`  top contacts:      ${r.topContactCount}`);
+        console.log(`  entries written:   ${r.entriesWritten}`);
+        console.log(`  entries unchanged: ${r.entriesUnchanged}`);
+        console.log(`  messages:          ${r.messagesProcessed}`);
+        if (r.sampleContacts.length > 0) {
+          console.log('\n  sample (top 10 by volume):');
+          for (const s of r.sampleContacts) {
+            console.log(`    ${s.name.padEnd(28)} ${s.messageCount} msgs`);
+          }
+        }
+        if (r.error) {
+          console.error(`\n  ERROR: ${r.error}`);
+          process.exit(1);
+        }
+      } else {
+        const r = importWhatsapp({
+          vaultPath: importVaultPath,
+          topN,
+          minMessageLength,
+          yourName,
+          apply,
+        });
+        console.log('WhatsApp import result:');
+        console.log(`  platformOk:        ${r.platformOk}`);
+        console.log(`  dbFound:           ${r.dbFound}`);
+        console.log(`  top contacts:      ${r.topContactCount}`);
+        console.log(`  entries written:   ${r.entriesWritten}`);
+        console.log(`  entries unchanged: ${r.entriesUnchanged}`);
+        console.log(`  messages:          ${r.messagesProcessed}`);
+        if (r.sampleContacts.length > 0) {
+          console.log('\n  sample (top 10 by volume):');
+          for (const s of r.sampleContacts) {
+            console.log(`    ${s.name.padEnd(28)} ${s.messageCount} msgs`);
+          }
+        }
+        if (r.error) {
+          console.error(`\n  ERROR: ${r.error}`);
+          process.exit(1);
+        }
+      }
+
+      if (!apply) {
+        console.log(
+          '\n[DRY RUN] No files written. Re-run with --apply to write to sources/.',
         );
       }
       return;
