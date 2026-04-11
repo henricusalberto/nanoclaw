@@ -11,6 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 
+import { applyProposal } from './apply-proposal.js';
 import { runAutofix } from './autofix.js';
 import { runBackfillHubs } from './backfill-hubs.js';
 import { syncWikiBridge } from './bridge.js';
@@ -36,6 +37,7 @@ import { serializeWikiPage, WikiPageFrontmatter } from './markdown.js';
 import { applyMigrationPlan, buildMigrationPlan } from './migrate-vault.js';
 import { invokeOperation, listOperations } from './operations.js';
 import { vaultPaths } from './paths.js';
+import { runQuery } from './query.js';
 import { resolveForVault } from './resolver.js';
 import { resolveSlug } from './slug-resolver.js';
 import {
@@ -124,6 +126,8 @@ const VALUE_FLAGS = new Set([
   '--min-mentions',
   '--input',
   '--tier',
+  '--question',
+  '--limit',
 ]);
 
 async function main(): Promise<void> {
@@ -142,7 +146,7 @@ async function main(): Promise<void> {
   // Some commands take a subcommand as their first positional rather
   // than a vault path. For those, treat positional[0] as the subcommand
   // and skip the vault arg entirely (always uses the default vault).
-  const SUBCOMMAND_HOSTS = new Set(['graph', 'slug', 'volume', 'op']);
+  const SUBCOMMAND_HOSTS = new Set(['graph', 'slug', 'volume', 'op', 'query']);
   const isSubcommandHost = SUBCOMMAND_HOSTS.has(cmd ?? '');
   const vaultArg = isSubcommandHost ? undefined : positional[0];
   const vaultPath = path.resolve(vaultArg || DEFAULT_VAULT);
@@ -307,6 +311,56 @@ async function main(): Promise<void> {
         process.exit(3);
       }
       console.log(`Shadow proposal written: ${result.proposedPath}`);
+      return;
+    }
+    case 'apply-proposal': {
+      const slug = getFlagValue(flags, args, '--page') ?? positional[1];
+      if (!slug) {
+        console.error(
+          'apply-proposal requires --page <slug> (or as second positional)',
+        );
+        process.exit(2);
+      }
+      const asJson = flags.includes('--json');
+      const result = applyProposal({
+        vaultPath,
+        slug,
+        dryRun: !apply,
+      });
+      if (asJson) {
+        console.log(JSON.stringify(result, null, 2));
+        if (!result.ok) process.exit(3);
+        return;
+      }
+      if (!result.ok) {
+        console.error(`apply-proposal: ${result.error}`);
+        process.exit(3);
+      }
+      if (result.dryRun) {
+        console.log(`[DRY RUN] Would apply proposal for: ${slug}`);
+        console.log(`  Target:   ${result.targetPath}`);
+        console.log(`  Proposal: ${result.proposedPath}`);
+        console.log(
+          `  New body: ${result.newBodyBytes} bytes, ${result.managedBlocksPreserved} managed blocks preserved`,
+        );
+        if (result.sections) {
+          console.log(
+            `  Dropped:  ${result.sections.claims} claims, ${result.sections.suggestedLinks} cross-links, ${result.sections.questions} questions, ${result.sections.contradictions} contradictions`,
+          );
+        }
+        console.log('');
+        console.log('--- new body preview ---');
+        console.log(result.newBodyPreview);
+        console.log('');
+        console.log('Re-run with --apply to write the change.');
+      } else {
+        console.log(`Applied proposal for: ${slug}`);
+        console.log(`  Target:   ${result.targetPath}`);
+        console.log(`  Archived: ${result.archivedPath}`);
+        console.log(
+          `  Body:     ${result.newBodyBytes} bytes, ${result.managedBlocksPreserved} managed blocks preserved`,
+        );
+      }
       return;
     }
     case 'resolve': {
@@ -745,6 +799,53 @@ async function main(): Promise<void> {
       }
       return;
     }
+    case 'query': {
+      // Positional question or --question flag. If no question is
+      // given, we search for the rest of argv joined with spaces to
+      // allow natural shell usage: `wiki query what's Dom's method?`.
+      const explicit = getFlagValue(flags, args, '--question');
+      const positionalQuestion =
+        positional.length > 0
+          ? positional.join(' ').trim()
+          : '';
+      const question = (explicit ?? positionalQuestion).trim();
+      if (!question) {
+        console.error(
+          'query requires a question, e.g. `wiki query "What is Dom\'s method?" [--save]`',
+        );
+        process.exit(2);
+      }
+      const save = flags.includes('--save');
+      const limitStr = getFlagValue(flags, args, '--limit');
+      const limit = limitStr ? Number(limitStr) : 20;
+      console.log(`Query: "${question}"`);
+      const result = await runQuery({
+        vaultPath,
+        question,
+        limit,
+        save,
+      });
+      console.log(
+        `\n${result.results.length} result${result.results.length === 1 ? '' : 's'} (${result.durationMs}ms):\n`,
+      );
+      for (const r of result.results.slice(0, 10)) {
+        console.log(
+          `  ${r.score.toString().padStart(4)}  ${r.slug.padEnd(40)}  ${r.title}`,
+        );
+        if (r.snippet) {
+          console.log(`         ${r.snippet.slice(0, 120)}`);
+        }
+      }
+      if (result.results.length > 10) {
+        console.log(`  … and ${result.results.length - 10} more`);
+      }
+      if (save && result.savedPath) {
+        console.log(`\nSaved to: ${result.savedPath}`);
+      } else if (save) {
+        console.log(`\n[warn] --save was passed but no path was returned`);
+      }
+      return;
+    }
     case 'op': {
       const opName = positional[0];
       if (!opName || opName === 'list') {
@@ -809,6 +910,10 @@ async function main(): Promise<void> {
         '                    Run Phase 3 MECE migration (dry-run by default)',
       );
       console.log('  dream             Run the nightly dream cycle');
+      console.log('  apply-proposal --page <slug> [--apply] [--json]');
+      console.log(
+        '                    Apply a shadow enrichment proposal (dry-run by default)',
+      );
       console.log('  history --page <slug>             List version history');
       console.log(
         '  diff --page <slug> --from <ts> --to <ts>  Diff two versions',
