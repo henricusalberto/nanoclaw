@@ -3,6 +3,8 @@
  */
 
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 import { atomicWriteFile } from './fs-util.js';
 import { vaultPaths } from './paths.js';
@@ -41,8 +43,19 @@ export interface BridgeSourceConfig {
   /**
    * Root path relative to the repo root. The glob is matched against
    * files under this root. Unused for pull sources.
+   *
+   * Either `rootPath` or `absoluteRootPath` must be set. If both are
+   * set, `absoluteRootPath` wins.
    */
   rootPath: string;
+  /**
+   * Absolute root path on the host. Used for sources that live outside
+   * the repo (e.g. Claude Code's auto-memory at
+   * `~/.claude/projects/<sanitized-cwd>/memory/`). When set, takes
+   * precedence over `rootPath`. Tilde-prefixed paths are NOT expanded
+   * here — callers should resolve `~` themselves before assigning.
+   */
+  absoluteRootPath?: string;
   glob: string; // e.g. "*.md", "**/*.md", "memory/*.md"
   exclude?: string[]; // glob patterns to exclude
   agentIds?: string[];
@@ -168,6 +181,29 @@ export const DEFAULT_BRIDGE_CONFIG: BridgeConfig = {
       glob: '*/notes/**/*.md',
       exclude: ['telegram_wiki-inbox/**', 'global/**'],
       agentIds: ['janus-nano'],
+      maxFileSizeBytes: 500_000,
+    },
+    {
+      // Claude Code's auto-memory for this project. Holds the typed
+      // user/feedback/project/reference docs that the Anthropic CLI
+      // writes from sessions in this repo. Bridging them gives the
+      // wiki passive capture of what Claude Code learns even when the
+      // user forgets to /wrap. Counterpart to the `/wrap` skill at
+      // `.claude/skills/wrap/SKILL.md` which writes session logs into
+      // `groups/global/memory/`.
+      id: 'claude-code-auto-memory',
+      kind: 'daily-note',
+      rootPath: 'groups/global', // unused (absoluteRootPath wins) but required by the schema
+      absoluteRootPath: path.join(
+        os.homedir(),
+        '.claude',
+        'projects',
+        '-Users-kimbehnke--nanoclaw-nanoclaw',
+        'memory',
+      ),
+      glob: '*.md',
+      exclude: ['MEMORY.md'],
+      agentIds: ['claude-code'],
       maxFileSizeBytes: 500_000,
     },
   ],

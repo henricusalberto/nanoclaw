@@ -18,11 +18,7 @@ import os from 'os';
 import path from 'path';
 import Database from 'better-sqlite3';
 
-import {
-  ContactMap,
-  extractContacts,
-  resolveHandle,
-} from './address-book.js';
+import { ContactMap, extractContacts, resolveHandle } from './address-book.js';
 import {
   RawEntryInput,
   RawMessage,
@@ -30,12 +26,7 @@ import {
   writeRawEntry,
 } from './raw-entry-writer.js';
 
-const IMESSAGE_DB = path.join(
-  os.homedir(),
-  'Library',
-  'Messages',
-  'chat.db',
-);
+const IMESSAGE_DB = path.join(os.homedir(), 'Library', 'Messages', 'chat.db');
 
 /** Apple reference date: 2001-01-01 UTC in Unix seconds. */
 const APPLE_EPOCH_OFFSET = 978307200;
@@ -199,10 +190,7 @@ export function importImessage(
       messageCount: row.cnt,
     }));
 
-    const msgStmt = db.prepare<
-      [string, number],
-      MessageRow
-    >(
+    const msgStmt = db.prepare<[string, number], MessageRow>(
       `SELECT
             datetime(m.date/1000000000 + ${APPLE_EPOCH_OFFSET}, 'unixepoch', 'localtime') as msg_date,
             m.text,
@@ -219,7 +207,8 @@ export function importImessage(
 
     for (const contact of topContacts) {
       const name = resolveHandle(contact.chat_identifier, contacts);
-      const contactSlug = slugifyContact(name) || slugifyContact(contact.chat_identifier);
+      const contactSlug =
+        slugifyContact(name) || slugifyContact(contact.chat_identifier);
       if (!contactSlug) continue;
 
       const messages = msgStmt.all(contact.chat_identifier, sinceUnix);

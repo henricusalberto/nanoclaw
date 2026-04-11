@@ -157,7 +157,12 @@ function resolveSourceFiles(
   sourceConfig: BridgeSourceConfig,
   repoRoot: string,
 ): ResolvedSourceFile[] {
-  const root = path.resolve(repoRoot, sourceConfig.rootPath);
+  // Sources outside the repo (e.g. Claude Code auto-memory at
+  // ~/.claude/projects/...) set absoluteRootPath. When unset, fall
+  // back to the repo-relative rootPath, which is the historical path.
+  const root = sourceConfig.absoluteRootPath
+    ? path.resolve(sourceConfig.absoluteRootPath)
+    : path.resolve(repoRoot, sourceConfig.rootPath);
   if (!fs.existsSync(root)) return [];
 
   // Hoist glob compilation per-source-config — one regex per pattern, reused

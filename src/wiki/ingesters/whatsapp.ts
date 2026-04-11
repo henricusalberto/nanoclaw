@@ -118,10 +118,7 @@ export function importWhatsapp(
       messageCount: row.cnt,
     }));
 
-    const msgStmt = db.prepare<
-      [number, number],
-      MessageRow
-    >(
+    const msgStmt = db.prepare<[number, number], MessageRow>(
       `SELECT
             datetime(m.ZMESSAGEDATE + ${APPLE_EPOCH_OFFSET}, 'unixepoch', 'localtime') as msg_date,
             m.ZTEXT,

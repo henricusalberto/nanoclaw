@@ -33,7 +33,9 @@ const ADDRESSBOOK_DIR = path.join(
  * both resolve the same way. Returns the last 10 digits as a canonical
  * key, or null for obviously invalid input.
  */
-export function normalizePhone(phone: string | null | undefined): string | null {
+export function normalizePhone(
+  phone: string | null | undefined,
+): string | null {
   if (!phone) return null;
   let digits = String(phone).replace(/\D/g, '');
   if (digits.length === 11 && digits.startsWith('1')) {
@@ -58,11 +60,7 @@ function findAddressBookDbs(): string[] {
   const sourcesDir = path.join(ADDRESSBOOK_DIR, 'Sources');
   if (fs.existsSync(sourcesDir)) {
     for (const entry of fs.readdirSync(sourcesDir)) {
-      const candidate = path.join(
-        sourcesDir,
-        entry,
-        'AddressBook-v22.abcddb',
-      );
+      const candidate = path.join(sourcesDir, entry, 'AddressBook-v22.abcddb');
       if (fs.existsSync(candidate)) out.push(candidate);
     }
   }
