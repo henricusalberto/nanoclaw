@@ -50,7 +50,24 @@ export type WikiPageKind =
    * them. One hub per page, lives under `wiki/hubs/`. `home.md` at
    * the vault root is also a hub.
    */
-  | 'hub';
+  | 'hub'
+  /**
+   * Phase 6 (cont'd): first-class homes for the shapes of thinking
+   * that don't fit `concept/`. Ported from farza's taxonomy:
+   *
+   *   tension/    — unresolved contradictions as living documents
+   *                 (two opposing forces whose trace evolves over time)
+   *   philosophy/ — articulated positions and beliefs the user has
+   *                 argued for, distinct from frameworks
+   *   pattern/    — recurring behavioural cycles (e.g. "always
+   *                 abandons projects at month 3")
+   *   decision/   — inflection points with enumerated reasoning
+   *                 (the Dec-18 Daily Sip pivot, OpenClaw→NanoClaw, …)
+   */
+  | 'tension'
+  | 'philosophy'
+  | 'pattern'
+  | 'decision';
 
 export interface WikiClaimEvidence {
   sourceId?: string;

@@ -62,6 +62,10 @@ export const KIND_TO_DIR: Record<WikiPageKind, string> = {
   'household-item': 'household',
   'inbox-item': 'inbox',
   hub: 'hubs',
+  tension: 'tensions',
+  philosophy: 'philosophies',
+  pattern: 'patterns',
+  decision: 'decisions',
 };
 
 /**

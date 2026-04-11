@@ -130,6 +130,11 @@ const KIND_TO_HUB: Partial<Record<WikiPageKind, HubSlug>> = {
   writing: 'me',
   'personal-note': 'me',
   'household-item': 'me',
+  // Phase 6 taxonomy: tensions, philosophies, patterns, decisions
+  tension: 'me', // inner-life lives on the `me` hub
+  philosophy: 'me',
+  pattern: 'playbooks', // behavioural cycles are a playbook shape
+  decision: 'businesses', // inflection points usually trace to business arcs
   // No default for `concept` — concepts go to a specific hub via the
   // explicit basename overrides or the concept-keyword rules below.
   // Un-curated concepts stay unassigned so the playbooks hub doesn't
