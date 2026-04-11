@@ -126,12 +126,38 @@ When a session materially changed the state of a business or system (shipped a f
 
 Janus updates the same files from inside containers via the `container/skills/session-wrap` skill. Both agents write to the same place, so handoffs are bidirectional. Don't create empty stubs; if a README doesn't exist yet, mention the gap in the wrap memory file's "Open threads" section instead.
 
-Also update the shared workspace-root files at `~/.openclaw/workspace/` when relevant:
-- `LEARNINGS.md` — durable insights that apply across businesses
-- `ERRORS.md` — bugs hit and how they were fixed
-- `FEATURE_REQUESTS.md` — things the user asked for that aren't built yet
+## Shared cross-session logs — LEARNINGS.md, ERRORS.md, FEATURE_REQUESTS.md
 
-Append dated entries. Don't rewrite existing ones.
+Three files at `~/.openclaw/workspace/` capture things that matter across sessions and across agents. Both Janus (in containers) and Claude Code (you, on the host) write to the same physical files. Append-only — never rewrite existing entries.
+
+**`~/.openclaw/workspace/LEARNINGS.md`** — durable insights that apply across businesses or should help a future session avoid a mistake.
+
+Format per entry:
+
+```markdown
+## YYYY-MM-DD — <short title>
+<2-4 sentences>. Enough context that a future session reading this cold understands. Link files with `path:line` when relevant.
+```
+
+**What counts**:
+- A non-obvious fact about a tool, API, or system that tripped you up
+- A pattern the user corrected you on that you should carry forward
+- A shortcut or workaround that turned out to work reliably
+- A gotcha in the codebase that would mislead a future reader
+
+**What does NOT count**:
+- Per-business state (business README Handoff block)
+- Today's tasks or what you did (the memory file, main output of `/wrap`)
+- Bugs that got fixed (see ERRORS.md below)
+- Unbuilt feature requests (see FEATURE_REQUESTS.md below)
+
+Most sessions don't produce a learning. Skip the append when nothing durable surfaced.
+
+**`~/.openclaw/workspace/ERRORS.md`** — bugs hit this session and the fix that worked. Future sessions search here before debugging the same thing twice. Same append-only format: `## YYYY-MM-DD — <title>` followed by the symptom, root cause, and the fix.
+
+**`~/.openclaw/workspace/FEATURE_REQUESTS.md`** — things the user asked for that you couldn't build yet. Include the ask verbatim, date, constraints mentioned. Janus and I both drain this list when asked "what's on the backlog".
+
+All three files are empty-by-default per session. Only append when the content is real.
 
 ## What `/wrap` does NOT do
 

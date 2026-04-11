@@ -55,7 +55,41 @@ Include:
 - Any credential/config/system changes
 - Business status changes
 
-## Step 3 — Confirm
+## Step 3 — Append to LEARNINGS.md (when applicable)
+
+If this session produced a durable insight that applies across businesses or would help a future session avoid a mistake, append it to `/workspace/extra/workspace/LEARNINGS.md`. One entry per learning. Format:
+
+```markdown
+## YYYY-MM-DD — <short title>
+<2-4 sentences>. Include enough context that a future session reading this cold understands the constraint. Link to related files with `path:line` when relevant.
+```
+
+Append only. Never rewrite existing entries. If multiple learnings surfaced in one session, write multiple entries under separate headings.
+
+**What counts as a learning**:
+- A non-obvious fact about a tool, API, or system that tripped you up
+- A pattern the user corrected you on that you should carry forward
+- A shortcut or workaround that turned out to work reliably
+- A gotcha in the codebase that would mislead a future reader
+
+**What does NOT count**:
+- Per-business state (that goes in the business README Handoff block)
+- Today's tasks (that goes in the memory file from Step 2)
+- Bugs that got fixed (those go in `ERRORS.md`)
+- Unbuilt feature requests (those go in `FEATURE_REQUESTS.md`)
+
+Skip this step entirely when nothing durable surfaced. Most sessions don't produce a learning.
+
+## Step 4 — Append to ERRORS.md / FEATURE_REQUESTS.md (when applicable)
+
+Both files also live at `/workspace/extra/workspace/`. Same append-only discipline as LEARNINGS.md.
+
+- **ERRORS.md** — bugs hit this session and the fix that worked. Future sessions search here before debugging the same thing twice.
+- **FEATURE_REQUESTS.md** — things the user asked for that you couldn't build yet. Include the ask verbatim, date, and any constraints they mentioned.
+
+Both can be empty for most sessions. Only add entries when the content is real.
+
+## Step 5 — Confirm
 
 Reply: "Session wrapped. [list files updated]"
 
@@ -64,5 +98,5 @@ Reply: "Session wrapped. [list files updated]"
 - Use CET for all dates and timestamps
 - Topic slug = short descriptor (e.g. `dashboard`, `coaching`, `pipeline`)
 - Do not wait for /wrap to write memory mid-session — write immediately when significant events occur
-- Also update `LEARNINGS.md`, `ERRORS.md`, `FEATURE_REQUESTS.md` at `/workspace/extra/workspace/` (the OpenClaw workspace root) when relevant content surfaces. These are shared across all businesses — LEARNINGS for durable insights, ERRORS for bugs hit and how they were fixed, FEATURE_REQUESTS for things the user asked for that aren't built yet. Append dated entries, don't rewrite existing ones.
 - Memory files live under `/workspace/global/memory/` (writable from main group only). Non-main groups should write to `/workspace/group/memory/` instead.
+- LEARNINGS / ERRORS / FEATURE_REQUESTS are shared across all groups and all agents. Both Janus and Claude Code write to the same files.
