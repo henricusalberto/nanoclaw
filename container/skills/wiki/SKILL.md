@@ -163,7 +163,7 @@ Plus the root-level `home.md` (a `hub` kind with special projection rules — se
 
 ### Hub navigation layer (Phase 6)
 
-Six hubs + the root dashboard provide the human-facing navigation. Every load-bearing page carries a `hub: <slug>` frontmatter field so compile's projection knows where to list it.
+Six life-domain hubs + two domain hubs + the root dashboard provide the human-facing navigation. Every load-bearing page carries a `hub: <slug>` frontmatter field so compile's projection knows where to list it. Pages may additionally carry a `hubSection: <slug>` to route into a sub-bucket within the hub (see below).
 
 | Hub | Slug | Purpose |
 |---|---|---|
@@ -174,8 +174,10 @@ Six hubs + the root dashboard provide the human-facing navigation. Every load-be
 | Systems | `systems` | Infrastructure: Janus/NanoClaw, finance pipeline, planning, wiki itself |
 | People | `people` | Advisors, partners, students, family — relationships index |
 | Me | `me` | Personal OS — ADHD, energy, philosophy, travel, health |
+| Pinterest | `pinterest` | Deep domain hub under businesses — system architecture, decision engine, experiments |
+| Coaching | `coaching` | Deep domain hub under businesses — methodology, team, students, operations |
 
-Each hub page has five managed blocks that compile regenerates from the tagged pages:
+Each hub page has five legacy aggregate blocks that compile regenerates from the tagged pages:
 
 - `<!-- openclaw:wiki:hub-concepts -->` — concept/synthesis pages
 - `<!-- openclaw:wiki:hub-entities -->` — project/company/person/deal pages
@@ -186,6 +188,32 @@ Each hub page has five managed blocks that compile regenerates from the tagged p
 **You never edit the managed block contents.** Only the 2-sentence intro above the first block is hand-written. If a hub feels empty, the fix is to tag more pages with `hub:` — the block fills itself on next compile.
 
 The `home.md` dashboard is a special case: its `hub-recent`, `hub-questions`, and `hub-try` blocks aggregate across ALL hubs, not just pages tagged `hub: home`.
+
+### Hub sub-sections (`hubSection:` routing)
+
+A flat hub list gets unreadable once a domain collects 30+ pages. So hubs can declare **hand-curated H3 sub-headers** under `## Core knowledge` and `## Things to try`, each with its own pair of section-scoped managed blocks:
+
+```markdown
+### Creative workflow
+_How to make ads that work: hooks, formats, AI tools, copy frameworks._
+
+<!-- openclaw:wiki:section-pages:creative-workflow:start -->
+<!-- openclaw:wiki:section-pages:creative-workflow:end -->
+
+<!-- openclaw:wiki:section-try:creative-workflow:start -->
+<!-- openclaw:wiki:section-try:creative-workflow:end -->
+```
+
+Compile routes pages and bookmarks into a sub-bucket when their frontmatter `hubSection` matches the slug. Pages with `hub: meta-ads, hubSection: creative-workflow` land in that block; pages with `hub: meta-ads` but no `hubSection` (or an unknown one) land in the hub's `everything-else` catch-all.
+
+**How sub-sections get created.** Two paths:
+
+1. **Manual bootstrap** — you or Maurizio hand-write the H3 heading + the description + the four managed block comments in the hub body. This is the primary path. Ship a new sub-section whenever a hub's "everything else" bucket has grown to more than ~6 pages on one theme.
+2. **Sonnet-proposed** — `wiki propose-sections` runs a Tier 2 Sonnet pass that reads every hub's `everything-else` members and proposes new sub-sections when a hub has ≥15 bookmarks or ≥5 pages with no section. Output lands as a shadow file at `.openclaw-wiki/enrichment/hubs/<hub>/sections-proposal.md`. Apply is stubbed — review the proposal, then hand-insert the H3 blocks yourself. Runs weekly inside the dream cycle when wired; manually callable anytime.
+
+**The bookmark classifier is section-aware.** When you run `wiki classify-bookmarks`, Haiku is given the per-hub H3 taxonomy parsed live from each `hubs/*.md` body and asked to pick a `hubSection` in addition to a `hub`. Existing classified bookmarks can be backfilled with section tags via `wiki classify-bookmarks --reclassify-sections`.
+
+**When writing a new page, always set `hubSection` if the target hub has sub-sections.** Skipping it drops the page into `everything-else`, which is a signal that the hub should either grow a new sub-section or that your page is genuinely cross-cutting.
 
 ### Semantic page kinds (Phase 6)
 
@@ -511,7 +539,10 @@ wiki graph traverse --page <slug> --depth 2                      # BFS from a no
 # Resolver + classification
 wiki resolve --title "..." --type <kind>                         # Which dir/hub does a new page belong in
 wiki backfill-hubs [--apply] [--force]                           # Retag hub: across the vault
-wiki classify-bookmarks [--apply]                                # Haiku-classify X bookmarks to hubs
+wiki classify-bookmarks [--apply]                                # Haiku-classify X bookmarks to hubs + hubSection
+wiki classify-bookmarks --apply --reclassify-sections            # Backfill hubSection on already-classified bookmarks
+wiki propose-sections [--dry-run]                                # Tier 2 Sonnet pass: suggest new H3 sub-sections per hub
+wiki apply-sections <hub>                                        # Apply a sections-proposal (currently stubbed)
 
 # Enrichment + dream cycle
 wiki dream                                                        # Run the nightly dream cycle now

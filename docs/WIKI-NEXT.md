@@ -11,6 +11,46 @@ kothari-nikunj/llm-wiki, mylife.wiki, and farza's gist.
 web viewer's own backlog lives in `wiki-clone/PLAN.md` and is not
 repeated here.
 
+## Status as of 2026-04-11
+
+Most of the plan below has now shipped. Quick status map, then the
+full text is preserved so the reasoning behind each item stays
+readable:
+
+| Item | Status | Landed in |
+|---|---|---|
+| P1 step 1 — anti-cramming lint | **shipped** | `3c06f8b feat(wiki): page-length lint` |
+| P1 step 2 — cramming candidate selector | **shipped (stub)** | `837a451 feat(wiki): cramming split-proposal infrastructure (stubs, not wired)` |
+| P1 step 3 — Tier 2 split-proposal prompt | **shipped (stub)** | `837a451` — Sonnet call wired, apply path intentionally stubbed |
+| P1 step 4 — `wiki apply-split` CLI | **stubbed** | `837a451` — CLI exits non-zero with "NOT YET IMPLEMENTED" |
+| 2.1 new kinds (tension/philosophy/pattern/decision) | **shipped** | `0ef3162 feat(wiki): add tension/philosophy/pattern/decision page kinds` |
+| 2.2 writing-tone lint | **shipped** | `6a7cd8e feat(wiki): writing-standards lint rule` |
+| 2.3 `wiki breakdown` | not started | — |
+| 2.4 `wiki reorganize` | not started | — |
+| 2.5 source hierarchy + layered absorb | partial — documented in SKILL.md + group CLAUDE.md, not yet enforced in bridge/candidate-processor | — |
+| 2.6 skill rewrite — writer framing | **shipped** | `7c28bc5 docs(wiki): rewrite SKILL.md opening with writer framing` + `f0e71bf docs(wiki): update SKILL.md with Phase 6 additions` |
+| 2.7 `wiki query` saved outputs | **shipped** | `8f273de feat(wiki): wiki query CLI with saved outputs` |
+
+**Shipped beyond the original plan:**
+
+- **Section-aware hub navigation** (`25e0558 feat(wiki): section-aware hub projection + classifier`). Hub pages can hand-declare H3 sub-headers; pages tagged `hubSection: <slug>` route into per-section managed blocks. The Haiku bookmark classifier reads each hub's H3 taxonomy and picks a sub-section too.
+- **Domain hubs** (`1158fa0 feat(wiki): extend HubSlug with pinterest + coaching domain hubs`). `pinterest` and `coaching` added alongside the 6 life-domain hubs for deep domain landings.
+- **Section proposer** (`194a827 feat(wiki): section proposer + propose/apply-sections CLI stubs`). A Tier 2 Sonnet pass that reads `everything-else` members per hub and proposes new H3 sub-sections when the bucket crosses thresholds (15 bookmarks or 5 pages). Apply path is intentionally stubbed — sub-sections are hand-curated after review.
+- **`ad-metrics-framework` → `ad-creative-building` split.** First vault-level anti-cramming action: the metrics page had grown to 278 lines by accreting AIDA/awareness/positioning content that wasn't really metrics. Done manually on 2026-04-11, before the split-proposal pipeline is wired for apply.
+
+**What's left for a daylight session:**
+
+1. Wire the `wiki apply-split` CLI — real atomic parent-rewrite + child-writes with inbound wikilink rewriting. The Sonnet prompt + shadow-proposal writer are in place.
+2. Wire the `wiki apply-sections` CLI — insert proposed H3 + managed blocks into a hub body. Proposal writer is in place.
+3. Wire `propose-sections` into the weekly dream cycle so it runs alongside Tier 3 sweeps.
+4. Migrate a few existing `concepts/` pages into the new semantic kinds: `concepts/lessons-learned` → `patterns/`, `concepts/behavioral-operating-system` → `philosophies/`, a new `decisions/daily-sip-to-nightcap-pivot` extracted from `syntheses/reviveplus-dec2025.md`. Judgment calls — requires Maurizio in the loop.
+5. Build `wiki breakdown` (2.3) and `wiki reorganize` (2.4) — not yet started.
+6. Enforce source hierarchy priority ordering in `bridge.ts` + `candidate-processor.ts` (2.5 code half).
+
+---
+
+**Historical plan preserved below for the reasoning on each item.**
+
 ---
 
 ## Priority 1 — Anti-cramming lint + split proposals
