@@ -92,40 +92,52 @@ The scanner has a daily USD cap tracked at `.openclaw-wiki/scan-budget.json`. If
 
 ### 3. Dream-cycle shadow proposals → `.openclaw-wiki/enrichment/<slug>/proposed.md`
 
-The `wiki-dream-nightly` cron runs at 03:00 CET every night. It scans for thin pages (low claim count, low confidence), runs a Haiku-class LLM pass on each, and writes a proposal to `.openclaw-wiki/enrichment/<slug>/proposed.md`. **The dream cycle NEVER writes to live pages** — shadow files are the whole discipline.
+The `wiki-dream-nightly` cron runs at 03:00 CET every night. It selects thin pages (low claim count, low confidence), dispatches each at the appropriate tier, and writes a proposal to `.openclaw-wiki/enrichment/<slug>/proposed.md`. **The dream cycle NEVER writes to live pages** — shadow files are the whole discipline.
 
-On wake, list any pending proposals:
+**Tiered enrichment with auto-escalation:**
+
+- **Tier 1 (Haiku, ~1k tokens)** — default for most thin pages. Produces a 3-sentence summary, up to 3 proposed claims, up to 5 suggested cross-links.
+- **Tier 2 (Sonnet, ~5k tokens)** — automatic escalation, not opt-in. A page gets Sonnet when ANY of: (a) `enrichmentTier: 2` is set in frontmatter, (b) it's a load-bearing kind (`person`, `company`, `project`, `deal`) with fewer than 3 claims, or (c) a prior run flagged contradictions on this page (persisted to `.openclaw-wiki/enrichment/<slug>/escalate.json`). Produces a fuller summary, a proposed compiled-truth rewrite, up to 6 claims, up to 8 links, contradictions, research questions.
+- **Tier 3 (Opus, ~15k tokens)** — weekly Sunday auto-pass on pages with `enrichmentTier: 3`. Plus ad-hoc via `wiki enrich <slug> --tier 3`. Produces a deep dossier with background, key facts, timeline, open questions, recommended reading.
+
+You never need to manually flip tier frontmatter — the dispatcher handles escalation based on vault state.
+
+**Per-tier budget ledger** at `.openclaw-wiki/dream-budget.json`. Current caps: Tier 1 = $1/day (~330 calls), Tier 2 = $5/day (~100 calls), Tier 3 = $3/day (~10 calls). If `blocked` is set, a tier hit its cap today — proposals thinned out. Caps reset at local midnight CET.
+
+**On wake, list pending proposals:**
 
 ```bash
 ls -1 .openclaw-wiki/enrichment/*/proposed.md 2>/dev/null
+ls -1 .openclaw-wiki/enrichment/*/split-proposal.md 2>/dev/null   # Phase 6 cramming splits (if any)
 ```
 
-For each proposal:
+For each enrichment `proposed.md`:
+
 1. Read the proposal and the corresponding live page
 2. Decide what to apply:
-   - **Summary** — if the 3-sentence summary is accurate, append it to the live page's body (inside a `## Summary` section if one exists, otherwise create one)
+   - **Summary / compiled truth** — if accurate, replace or extend the live page's intro / Compiled Truth section
    - **Proposed claims** — for each claim, decide whether it's load-bearing and citable. If yes, add it to the page's `claims:` frontmatter array with the standard structure and a `[Source: dream-cycle, <proposal file>, YYYY-MM-DD]` attribution
-   - **Suggested cross-links** — only add links whose target basenames actually exist (check the index first). Skip hallucinated targets
-   - **Contradictions flagged** — surface these to Maurizio in chat. Do not auto-resolve
-   - **Research questions** — add to the page's `questions:` frontmatter array or the `## Open questions` section
-3. After applying (or consciously discarding), delete the proposal:
+   - **Suggested cross-links** — only add links whose target basenames actually exist (check via `agent-digest.json`). Skip hallucinated targets.
+   - **Contradictions flagged** — surface these to Maurizio. Consider promoting a recurring contradiction to a dedicated `tensions/<slug>.md` page.
+   - **Research questions** — add to the page's `questions:` frontmatter array
+   - **Dossier (Tier 3 only)** — the deep sections are a draft. Apply them selectively and trim heavily.
+3. After applying (or consciously discarding), archive the proposal:
    ```bash
-   rm .openclaw-wiki/enrichment/<slug>/proposed.md
-   rmdir .openclaw-wiki/enrichment/<slug> 2>/dev/null
+   mv .openclaw-wiki/enrichment/<slug>/proposed.md \
+      .openclaw-wiki/enrichment/<slug>/applied-$(date -u +%Y%m%dT%H%M%SZ).md
    ```
 
-The morning dream report at `reports/dream-YYYY-MM-DD.md` summarises the cycle — how many pages were scanned, how many proposals written, whether any tier hit its budget cap. Mention the report to Maurizio if there are notable items (contradictions, many proposals, errors).
+**`split-proposal.md` is different** — it's the cramming pipeline's output (Phase 6). A crammed page (prose length > 1.25× its kind's ceiling) gets a Sonnet pass that returns a split plan: a short parent summary + N focused children. **Apply with care** — splitting a load-bearing page is structural surgery. The `wiki apply-split <slug>` CLI subcommand exists but is currently stubbed with "NOT YET IMPLEMENTED" pending a daylight wiring pass. For now, split-proposals are review-only; flag them to Maurizio and wait for explicit approval before touching the parent page body.
 
-#### Dream-cycle budget awareness
-
-Per-tier daily caps live at `.openclaw-wiki/dream-budget.json`. If `blocked` is set, a tier hit its cap today — proposals thinned out. Caps reset at local midnight.
+The morning dream report at `reports/dream-YYYY-MM-DD.md` summarises the cycle — how many pages were scanned, how many proposals at each tier, whether the weekly Tier 3 sweep ran, whether any tier hit its budget cap. Mention the report to Maurizio if there are notable items (contradictions, many proposals, errors).
 
 ## OpenClaw-compatible vault layout
 
-This vault is OpenClaw-compatible. The directory structure (Phase 3 MECE taxonomy):
+This vault is OpenClaw-compatible. The directory structure (Phase 3 MECE + Phase 6 navigation and semantic kinds):
 
 | Dir | Page kind | What lives here |
 |---|---|---|
+| `hubs/` | hub | **Navigation layer.** Six landing pages per life domain. Bodies are almost entirely auto-populated managed blocks. Never hand-edit the blocks. |
 | `people/` | person | Human beings — one page per individual |
 | `companies/` | company | Organizations, businesses, brands |
 | `projects/` | project | Actively built things with repo/spec/team |
@@ -138,10 +150,51 @@ This vault is OpenClaw-compatible. The directory structure (Phase 3 MECE taxonom
 | `inbox/` | inbox-item | Unsorted captures awaiting curation |
 | `concepts/` | concept | Frameworks, methodologies, mental models |
 | `syntheses/` | synthesis | Narrative arcs, time-bounded reflections, executive summaries |
+| `tensions/` | tension | Unresolved contradictions as living documents (two opposing forces traced over time) |
+| `philosophies/` | philosophy | Articulated positions and beliefs — arguments for a stance, not frameworks |
+| `patterns/` | pattern | Recurring behavioural cycles (e.g. "abandons projects at month 3") |
+| `decisions/` | decision | Inflection points with enumerated reasoning |
 | `originals/` | original | Immutable verbatim thought capture (never edit) |
-| `sources/` | source | Raw bridge-imported pages and manual extracts |
-| `reports/` | report | Auto-generated dashboards (lint, contradictions) |
+| `sources/` | source | Raw bridge-imported pages and manual extracts. ~1000 files. Classifier tags bookmarks with `hub:` + `hubPriority` for routing. |
+| `reports/` | report | Auto-generated dashboards (lint, dream, volume, overnight, queries) |
 | `entities/` | entity | **Legacy** — pre-Phase-3 catch-all. New pages never land here. |
+
+Plus the root-level `home.md` (a `hub` kind with special projection rules — see **Hub navigation layer** below).
+
+### Hub navigation layer (Phase 6)
+
+Six hubs + the root dashboard provide the human-facing navigation. Every load-bearing page carries a `hub: <slug>` frontmatter field so compile's projection knows where to list it.
+
+| Hub | Slug | Purpose |
+|---|---|---|
+| Home dashboard | `home` (at `wiki/home.md`) | Cross-hub aggregator: stats, recent activity, open questions, top classified bookmarks from any domain |
+| Businesses | `businesses` | Revenue-producing or trying to be — Nightcap, Pinterest, coaching, new ventures |
+| Meta Ads | `meta-ads` | FB/IG ads playbook: algorithm, copy, metrics, compliance, case studies |
+| Playbooks | `playbooks` | Non-ads methodologies — product dev, wealth, coaching, ADHD system design |
+| Systems | `systems` | Infrastructure: Janus/NanoClaw, finance pipeline, planning, wiki itself |
+| People | `people` | Advisors, partners, students, family — relationships index |
+| Me | `me` | Personal OS — ADHD, energy, philosophy, travel, health |
+
+Each hub page has five managed blocks that compile regenerates from the tagged pages:
+
+- `<!-- openclaw:wiki:hub-concepts -->` — concept/synthesis pages
+- `<!-- openclaw:wiki:hub-entities -->` — project/company/person/deal pages
+- `<!-- openclaw:wiki:hub-try -->` — classified bookmarks sorted by priority
+- `<!-- openclaw:wiki:hub-questions -->` — open claims from any tagged page
+- `<!-- openclaw:wiki:hub-recent -->` — pages updated in last 7 days
+
+**You never edit the managed block contents.** Only the 2-sentence intro above the first block is hand-written. If a hub feels empty, the fix is to tag more pages with `hub:` — the block fills itself on next compile.
+
+The `home.md` dashboard is a special case: its `hub-recent`, `hub-questions`, and `hub-try` blocks aggregate across ALL hubs, not just pages tagged `hub: home`.
+
+### Semantic page kinds (Phase 6)
+
+Four kinds for the shapes of thinking that don't fit `concept/`:
+
+- **`tensions/`** — unresolved contradictions as living documents. A tension page traces two opposing forces ("ship fast" vs "build to last", Dom's methodology vs instinct) and gets updated as new evidence lands on either side. Different from the `contradictions` frontmatter field: that marks a single claim as contested, a tension page is the long-form study.
+- **`philosophies/`** — articulated positions and beliefs. Not frameworks (those stay in `concepts/`), not rules (those go to `patterns/`). These are arguments for a stance.
+- **`patterns/`** — recurring behavioural cycles. "I always abandon projects at month 3" is a pattern, not a concept. Pattern pages collect instances + the recurring structure + what interrupts the pattern.
+- **`decisions/`** — inflection points with enumerated reasoning. Daily Sip → Nightcap pivot, OpenClaw → NanoClaw migration, moving to Nevada. The decision, the alternatives, the reasoning, the outcome (filled in later).
 
 ### Always call `wiki resolve` before creating a page
 
@@ -308,12 +361,17 @@ claims:
 
 The lint will tell you when claims are stale or unsupported. Run `npm run wiki:lint` to see the report at `reports/lint.md`.
 
-## Two special files (read FIRST on any query)
+## Read FIRST on every query (four files)
 
-- **`.openclaw-wiki/cache/agent-digest.json`** — pre-computed compact summary of every page in the wiki. Contains pageCounts, claimCount, claimHealth, contradictionClusters, and a `pages[]` array where each entry has `{id, title, kind, path, sourceIds, freshnessLevel, claimCount, topClaims}`. **Always read this FIRST when answering a query.** It tells you which pages are relevant without grepping markdown. Only drill into specific pages after locating them in the digest. The digest is auto-rewritten by every compile pass.
-- **`.openclaw-wiki/cache/claims.jsonl`** — one structured claim per line, grep-friendly. Use this when fact-checking or looking for contradictions. Each line: `{id, pageId, pageTitle, pageKind, pagePath, text, status, confidence, evidence, freshnessLevel}`.
-- **`index.md`** — human-readable catalog (auto-generated by compile from each page's title). Useful for browsing in Obsidian.
-- **`.openclaw-wiki/log.jsonl`** — append-only chronological event log. One JSON object per line: `{ "ts": "ISO", "type": "ingest|compile|lint|note", "data": {...} }`. Append after every ingest, lint, and significant write using a Bash command.
+1. **`home.md`** — the human dashboard. Six hub links + `## Recently changed` + `## Open questions across the vault` + `## New things to try (across all domains)`. Managed blocks populated by compile. Start here on every query; follow the hub link to the right domain, then drill in. Replaces the old "read `index.md` first" pattern.
+
+2. **`.openclaw-wiki/cache/agent-digest.json`** — pre-computed compact summary of every page in the wiki. Contains pageCounts, claimCount, claimHealth, contradictionClusters, and a `pages[]` array where each entry has `{id, title, kind, path, sourceIds, freshnessLevel, claimCount, topClaims}`. Consult this when you need to find relevant pages without grepping markdown. Only drill into specific pages after locating them in the digest. The digest is auto-rewritten by every compile pass.
+
+3. **`.openclaw-wiki/cache/claims.jsonl`** — one structured claim per line, grep-friendly. Use this when fact-checking or looking for contradictions. Each line: `{id, pageId, pageTitle, pageKind, pagePath, text, status, confidence, evidence, freshnessLevel}`.
+
+4. **`.openclaw-wiki/log.jsonl`** — append-only chronological event log. One JSON object per line: `{ "ts": "ISO", "type": "ingest|compile|lint|note", "data": {...} }`. Append after every ingest, lint, and significant write using a Bash command.
+
+The old `index.md` still exists as a 1300-line auto-generated catalog, useful for browsing in Obsidian but no longer the entry point. `home.md` supersedes it for reads; compile auto-regenerates both.
 
 ## Three operations
 
@@ -355,33 +413,33 @@ The user drops a source: a URL, PDF path, image, screenshot, pasted article, or 
 3. **Discuss with the user.** Send a short message naming the key takeaways and asking if there's anything specific to emphasize, before writing pages. Skip discussion only if the user explicitly says "just ingest it" or for trivial sources.
 
 4. **Touch all affected pages.** A meaty source typically updates 5–15 pages:
-   - Create or update an entity page for each major person, product, company mentioned.
-   - Create or update concept pages for frameworks, methods, ideas introduced.
-   - Update related "Things tried" or "Things to try" entries if relevant.
-   - Add cross-references using `[[wiki-link]]` style bidirectionally (every cross-reference should exist on both sides — A links to B, B links back to A).
-   - Flag contradictions with prior wiki content explicitly. Do not silently overwrite.
+   - Create or update an entity page for each major person, product, company mentioned. Add new structured `claims[]` with evidence and attribution, don't just append to prose.
+   - Create or update concept pages for frameworks, methods, ideas introduced. If a concept is really a belief, a behavioural cycle, or an inflection point, use the right semantic kind (`philosophy`, `pattern`, `decision`, `tension`) rather than `concept`.
+   - Update related bookmark-based "Things to try" entries if relevant — but those are usually auto-routed by the nightly classifier; don't file bookmarks by hand unless the classifier got something wrong.
+   - Add cross-references using `[[wiki-link]]` style bidirectionally (every cross-reference should exist on both sides).
+   - Tag `hub: <slug>` on every new page in frontmatter so compile's hub projection picks it up. Run `wiki resolve --title "..." --type <kind>` if unsure which hub.
+   - Flag contradictions with prior wiki content explicitly. A contradiction worth tracking over time should graduate from a `contradictions:` frontmatter field to a dedicated `tensions/<slug>.md` page.
 
-5. **Update `wiki/index.md`** — add new pages under their category, update one-line summaries for changed pages.
+5. **Let compile handle indexing.** Don't hand-edit `index.md` or the per-directory `index.md` files — compile regenerates them from the new page's frontmatter. Don't hand-edit hub managed blocks — compile refreshes them too. What you write is: the page body + claims + wikilinks + the hub tag. Compile does the rest on the next run.
 
-6. **Append to `wiki/log.md`**:
+6. **Append to `.openclaw-wiki/log.jsonl`** (NOT `log.md` — the old flat journal is superseded by the structured event log):
+   ```bash
+   echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","type":"ingest","data":{"source":"sources/<slug>","pagesTouched":["person.dom-ingleston","concept.facebook-ad-algorithm"],"summary":"<one line>"}}' >> .openclaw-wiki/log.jsonl
    ```
-   ## [YYYY-MM-DD] ingest | <Source title>
 
-   Source: `sources/<filename>`. Touched pages: <list>. Key takeaways: <2-3 sentences>.
-   ```
-
-7. **Commit verbally.** Tell the user what you did: which pages were created, which updated, any contradictions flagged.
+7. **Commit verbally.** Tell the user what you did: which pages were created, which updated, any contradictions flagged, which hub picked them up.
 
 ### 2. Query
 
 The user asks a question. Steps:
 
-1. Read `wiki/index.md` first to find relevant pages by category.
-2. If the index is insufficient, grep `wiki/` for keywords.
-3. Read the relevant pages fully (not just snippets).
-4. Synthesize an answer with **citations** — link every claim to its source page using `[[page-name]]` style.
-5. If the answer reveals a gap or pattern worth keeping, offer to file the answer back as a new wiki page (this is how the wiki compounds).
-6. For non-trivial queries, append a `## [YYYY-MM-DD] query | <topic>` entry to `wiki/log.md` with a one-line summary.
+1. **Read `home.md` first.** It has the 6 hub links + recently changed pages + open questions + top-priority bookmarks. For most questions, one of the six hubs is where to go next.
+2. **Consult `.openclaw-wiki/cache/agent-digest.json`** for a compact index of every page — faster than grepping markdown. Filter by kind + hub to narrow scope.
+3. For a free-form search, use the CLI: `wiki query "question text" --save`. It runs structured search across the vault, saves the result to `reports/queries/<date>-<slug>.md`, and returns the ranked hits. The saved artefact is reusable for follow-ups.
+4. Read the relevant pages fully (not just snippets). Prefer the structured `claims[]` arrays over prose when answering factual questions — claims carry confidence and attribution.
+5. Synthesize an answer with **citations** — link every claim to its source page using `[[page-name]]` style, and when possible include the `[Source: who, context, date]` attribution from the claim's evidence.
+6. If the answer reveals a gap or pattern worth keeping, offer to file the answer back as a new wiki page. A good query answer often becomes a `concept`, `philosophy`, or `synthesis` page; tag its `hub` and compile picks it up.
+7. For non-trivial queries, append a `{"type":"query"}` entry to `.openclaw-wiki/log.jsonl` with a one-line summary.
 
 ### 3. Lint
 
@@ -425,10 +483,51 @@ Don't auto-fix anything that requires Maurizio's judgment. Auto-fix only mechani
 
 - ❌ Reading 5 PDFs and writing one big "summary of all of them." Process individually.
 - ❌ Updating only the new page and ignoring related existing pages. Cross-reference is the whole point.
-- ❌ Summarizing instead of fetching full source content. Use `curl` / `pdf-reader` / `agent-browser`, not WebFetch.
-- ❌ Silently overwriting contradictory claims. Flag them.
-- ❌ Skipping the index/log updates. They're how the wiki stays navigable.
-- ❌ Creating a new page when an existing page should be updated.
+- ❌ Summarizing instead of fetching full source content. Use `wiki extract` / `pdf-reader` / `agent-browser`, never WebFetch.
+- ❌ Silently overwriting contradictory claims. Flag them, and promote recurring contradictions to `tensions/<slug>.md` pages.
+- ❌ Hand-editing hub managed blocks or `index.md`. Compile regenerates them. You write the page + its `hub:` tag; compile handles the rest.
+- ❌ Creating a new page when an existing page should be updated. Read the agent-digest first to find the right existing home for a fact.
+- ❌ Filing bookmarks by hand. They're routed to hub "Things to try" blocks by the nightly classifier.
+- ❌ Flipping `enrichmentTier` frontmatter by hand. Tier 2 escalation is automatic based on vault state.
+- ❌ Appending every fact to the nearest page ("cramming"). Lint will warn when a page exceeds 1.25× its kind's length ceiling; split into focused children.
+- ❌ Writing stub pages and walking away ("thinning"). Tier 1 enrichment picks them up, but prefer enriching immediately on create.
+- ❌ Using em dashes, AI clichés (delve, tapestry, landscape, pivotal, crucial, …), or quoting more than 2 verbatim blocks per page. Writing-standards lint catches these.
+
+## Cheat sheet — every CLI subcommand you need
+
+```bash
+# Content ingestion
+wiki extract --url <url> | --file <path> | --bookmark-id <id>   # Unified extractor
+wiki bridge                                                      # Force-sync memory files into sources/
+
+# Navigation + discovery
+wiki query "question text" --save                                # Ranked search + save to reports/queries/
+wiki op list                                                     # All programmatic ops available
+wiki op search --input '{"query":"..."}'                         # Programmatic search
+wiki op get_backlinks --input '{"slug":"..."}'                   # All pages linking to a target
+wiki slug resolve "Dom Ingleston"                                # Fuzzy slug lookup
+wiki graph traverse --page <slug> --depth 2                      # BFS from a node
+
+# Resolver + classification
+wiki resolve --title "..." --type <kind>                         # Which dir/hub does a new page belong in
+wiki backfill-hubs [--apply] [--force]                           # Retag hub: across the vault
+wiki classify-bookmarks [--apply]                                # Haiku-classify X bookmarks to hubs
+
+# Enrichment + dream cycle
+wiki dream                                                        # Run the nightly dream cycle now
+wiki enrich <slug> [--tier 1|2|3]                                # Manual single-page enrichment
+
+# Versioning
+wiki history --page <slug>                                       # List version snapshots
+wiki diff --page <slug> --from <ts> --to <ts>                    # Diff two versions
+wiki revert --page <slug> --ts <ts>                              # Revert to a prior version
+
+# Health
+wiki compile                                                      # Refresh related blocks, timelines, hubs, digest
+wiki lint                                                         # Run all lint checks
+wiki autofix [--apply]                                            # Auto-repair fixable lint issues
+wiki volume report                                                # FTS5 threshold checker
+```
 
 ## When NOT in the Wiki Inbox group
 
