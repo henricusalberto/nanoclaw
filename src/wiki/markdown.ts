@@ -114,6 +114,17 @@ export interface WikiPageFrontmatter {
   hubPriority?: number;
   /** One-line summary the classifier generates for things-to-try rendering. */
   hubOneLiner?: string;
+  /**
+   * Phase 6: sub-bucket within a hub. When a hub page declares H3 sub-headers
+   * under its `## Core knowledge` or `## Things to try` sections, pages
+   * tagged with a matching `hubSection` slug are routed into that sub-bucket
+   * by `hub-projection.ts`. Pages with a hub but no hubSection fall into the
+   * catch-all "Everything else" block at the bottom of each section.
+   *
+   * Classifier-generated for bookmark sources. Optionally set by hand on
+   * concept/project/entity pages.
+   */
+  hubSection?: string;
   // NanoClaw-specific extras (preserved through round-trip but ignored by OpenClaw lint)
   [key: string]: unknown;
 }

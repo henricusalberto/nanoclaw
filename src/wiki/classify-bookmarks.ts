@@ -59,6 +59,14 @@ export interface ClassifyBookmarksOptions {
   now?: Date;
   /** Injected for tests. Defaults to the real Haiku path. */
   llmCall?: typeof callClaudeCli;
+  /**
+   * Phase 6: re-run the classifier on bookmarks that already carry a
+   * `hub:` field but are missing `hubSection:`. Used for the one-time
+   * backfill after introducing sub-sections. Without this flag,
+   * already-classified bookmarks are skipped (default behaviour, cheap
+   * and idempotent).
+   */
+  reclassifyMissingSection?: boolean;
 }
 
 export interface ClassifyBookmarksResult {
@@ -84,9 +92,18 @@ interface BookmarkInput {
 interface BookmarkDecision {
   id: string;
   hub: string;
+  hubSection: string;
   priority: number;
   oneLiner: string;
 }
+
+/**
+ * Per-hub section taxonomy parsed from the hub pages at classifier
+ * boot. Keys are hub slugs, values are arrays of section slugs. Empty
+ * array = hub has no sub-sections yet, classifier won't emit a
+ * `hubSection` for it.
+ */
+type HubSectionMap = Record<string, string[]>;
 
 export async function classifyBookmarks(
   vaultPath: string,
@@ -114,6 +131,12 @@ export async function classifyBookmarks(
     return result;
   }
 
+  // Phase 6: scan every hub page for declared sub-sections. The
+  // classifier will include this taxonomy in the prompt so Haiku can
+  // route bookmarks into the right sub-bucket, not just the top-level
+  // hub.
+  const hubSectionMap = loadHubSectionMap(vaultPath);
+
   // Collect unclassified bookmarks.
   const queue: BookmarkInput[] = [];
   for (const name of fs.readdirSync(sourcesDir)) {
@@ -136,8 +159,20 @@ export async function classifyBookmarks(
       continue;
     }
 
-    const existing = parsed.frontmatter.hub;
-    if (typeof existing === 'string' && existing.trim().length > 0) {
+    const existingHub = parsed.frontmatter.hub;
+    const existingSection = parsed.frontmatter.hubSection;
+    const isClassified =
+      typeof existingHub === 'string' && existingHub.trim().length > 0;
+    const hasSection =
+      typeof existingSection === 'string' && existingSection.trim().length > 0;
+
+    if (isClassified && hasSection) {
+      // Fully classified at both levels — skip.
+      result.alreadyClassified++;
+      continue;
+    }
+    if (isClassified && !opts.reclassifyMissingSection) {
+      // Hub set but no section. Skip unless caller asks for backfill.
       result.alreadyClassified++;
       continue;
     }
@@ -182,7 +217,7 @@ export async function classifyBookmarks(
 
     let decisions: BookmarkDecision[] = [];
     try {
-      decisions = await runBatch(batch, llmCall);
+      decisions = await runBatch(batch, llmCall, hubSectionMap);
       result.llmCalls++;
       recordDreamSpend(
         vaultPath,
@@ -213,9 +248,17 @@ export async function classifyBookmarks(
 
       if (!opts.apply) continue;
 
+      const validSections = hubSectionMap[hub] ?? [];
+      const hubSection =
+        decision.hubSection &&
+        validSections.includes(decision.hubSection)
+          ? decision.hubSection
+          : 'everything-else';
+
       const nextFm: WikiPageFrontmatter = {
         ...bookmark.frontmatter,
         hub,
+        hubSection,
         hubPriority: clamp01(decision.priority),
         hubOneLiner: decision.oneLiner || bookmark.frontmatter.title,
       };
@@ -238,13 +281,63 @@ function clamp01(n: unknown): number {
 }
 
 // =============================================================================
+// Hub section taxonomy — parsed at classifier boot from hub page H3s
+// =============================================================================
+
+/**
+ * Walk every `hubs/*.md` page in the vault, parse H3 headers inside its
+ * body, and build a map of hub slug → allowed section slugs. This is
+ * the source of truth the classifier uses to decide valid sub-buckets.
+ * Hubs without any H3s in their body get an empty array and the
+ * classifier will route all their bookmarks to `everything-else`.
+ *
+ * Section slugs are lowercased with spaces collapsed to hyphens.
+ * Rationale: the H3 header in the page is the canonical spelling ("Media
+ * buying"), the slug is the machine form ("media-buying").
+ */
+function loadHubSectionMap(vaultPath: string): HubSectionMap {
+  const map: HubSectionMap = {};
+  const hubsDir = path.join(vaultPath, 'hubs');
+  if (!fs.existsSync(hubsDir)) return map;
+
+  for (const name of fs.readdirSync(hubsDir)) {
+    if (!name.endsWith('.md') || name === 'index.md') continue;
+    const slug = path.basename(name, '.md');
+    const raw = fs.readFileSync(path.join(hubsDir, name), 'utf-8');
+    let parsed;
+    try {
+      parsed = parseWikiPage(raw);
+    } catch {
+      continue;
+    }
+    const sections: string[] = [];
+    const h3Re = /^###\s+([^\n]+)$/gm;
+    let m: RegExpExecArray | null;
+    while ((m = h3Re.exec(parsed.body)) !== null) {
+      const heading = m[1].trim();
+      if (!heading || heading.toLowerCase().startsWith('(')) continue;
+      const sectionSlug = heading
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      if (sectionSlug && !sections.includes(sectionSlug)) {
+        sections.push(sectionSlug);
+      }
+    }
+    map[slug] = sections;
+  }
+  return map;
+}
+
+// =============================================================================
 // Prompt + parse
 // =============================================================================
 
-const CLASSIFIER_PROMPT = `You classify bookmarked tweets into hubs for a personal second brain. You will see a list of tweets, each with an ID. For each tweet, return a JSON object with:
+const BASE_CLASSIFIER_PROMPT = `You classify bookmarked tweets into hubs for a personal second brain. You will see a list of tweets, each with an ID. For each tweet, return a JSON object with:
 
   - id: the exact tweet ID from the input
   - hub: one of "meta-ads", "playbooks", "systems", "businesses", "me", or "none"
+  - hubSection: one of the section slugs listed for the chosen hub (see taxonomy below), or "everything-else" if no section fits
   - priority: 0 to 1, how actionable and high-signal this tweet is (1 = try this soon, 0 = archive only)
   - oneLiner: one sentence under 100 chars describing what to try or why it matters
 
@@ -254,13 +347,33 @@ Hub definitions:
   - "systems": AI tools, dev tools, productivity apps, infrastructure, automation, databases, APIs
   - "businesses": Specific brand case studies, D2C operations, Shopify, fulfillment, supplier negotiation (not abstract frameworks)
   - "me": Personal OS, ADHD, health, philosophy, habits, travel, mindset
-  - "none": Noise, pure entertainment, or genuinely uncategorisable
+  - "none": Noise, pure entertainment, or genuinely uncategorisable (use hubSection: "everything-else")
 
-Return ONLY a JSON array like [{"id":"...","hub":"...","priority":0.7,"oneLiner":"..."}, ...] with one entry per tweet. No prose, no code fence.`;
+Return ONLY a JSON array like [{"id":"...","hub":"...","hubSection":"...","priority":0.7,"oneLiner":"..."}, ...] with one entry per tweet. No prose, no code fence.`;
+
+function buildClassifierPrompt(hubSectionMap: HubSectionMap): string {
+  const taxonomyLines: string[] = ['', 'Section taxonomy (per hub):'];
+  for (const [hub, sections] of Object.entries(hubSectionMap)) {
+    if (sections.length === 0) {
+      taxonomyLines.push(`  - ${hub}: (no sub-sections yet, always use "everything-else")`);
+    } else {
+      taxonomyLines.push(`  - ${hub}: ${sections.map((s) => `"${s}"`).join(', ')}, "everything-else"`);
+    }
+  }
+  taxonomyLines.push(
+    '',
+    'Rules for hubSection:',
+    '  - Must be one of the slugs listed for the chosen hub, OR "everything-else" as a catch-all.',
+    '  - When a bookmark clearly fits multiple sections, pick the dominant one.',
+    '  - When unsure, prefer "everything-else" over guessing — the classifier proposer will notice piles and suggest new sections later.',
+  );
+  return BASE_CLASSIFIER_PROMPT + '\n' + taxonomyLines.join('\n');
+}
 
 async function runBatch(
   batch: BookmarkInput[],
   llmCall: typeof callClaudeCli,
+  hubSectionMap: HubSectionMap,
 ): Promise<BookmarkDecision[]> {
   const promptTweets = batch
     .map((b) => {
@@ -269,7 +382,7 @@ async function runBatch(
     })
     .join('\n\n---\n\n');
 
-  const prompt = `${CLASSIFIER_PROMPT}\n\nTweets:\n\n${promptTweets}`;
+  const prompt = `${buildClassifierPrompt(hubSectionMap)}\n\nTweets:\n\n${promptTweets}`;
 
   const { json, stdout } = await llmCall({
     prompt,
@@ -287,6 +400,8 @@ async function runBatch(
     out.push({
       id,
       hub: typeof e.hub === 'string' ? e.hub : 'none',
+      hubSection:
+        typeof e.hubSection === 'string' ? e.hubSection : 'everything-else',
       priority: typeof e.priority === 'number' ? e.priority : 0.5,
       oneLiner: typeof e.oneLiner === 'string' ? e.oneLiner : '',
     });

@@ -77,6 +77,13 @@ const ENTITY_KINDS = new Set<WikiPageKind>([
 
 const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const TOP_THINGS_TO_TRY = 20;
+/**
+ * Cap on how many bookmarks appear inside each section-scoped "Things
+ * to try" block. Chosen so a Meta Ads page with 4 sub-sections still
+ * renders under 50 total bookmarks on screen (~12 per section) without
+ * overwhelming the reader.
+ */
+const TOP_SECTION_TRY = 12;
 
 export function projectHubs(
   vaultPath: string,
@@ -142,11 +149,104 @@ export function projectHubs(
       opts.parsedByPath?.get(hubPage.filePath) ??
       readWikiPage(hubPage.filePath);
 
+    // Phase 6: section-scoped managed blocks. When a hub page declares
+    // H3 sub-headers inside its `## Core knowledge` or `## Things to try`
+    // sections, compile also rewrites managed blocks named
+    // `section-pages:<slug>` and `section-try:<slug>`. Members are
+    // filtered by the `hubSection` frontmatter field. A safety catch-all
+    // named `section-pages:everything-else` / `section-try:everything-else`
+    // receives anything tagged to this hub but without a hubSection.
+    const sectionSlugs = parseDeclaredSectionSlugs(parsed.body);
+    const sectionBlocks: Array<[string, string]> = [];
+    if (sectionSlugs.size > 0) {
+      const taggedPages = members.filter(
+        (p) => p.kind && !CONCEPT_KINDS.has(p.kind) && p.kind !== 'source',
+      );
+      const untaggedConcepts: VaultPageRecord[] = [];
+      const untaggedTry: VaultPageRecord[] = [];
+      const conceptsBySection = new Map<string, VaultPageRecord[]>();
+      const tryBySection = new Map<string, VaultPageRecord[]>();
+
+      for (const p of concepts) {
+        const s = frontmatterSectionSlug(p);
+        if (s && sectionSlugs.has(s)) {
+          pushToMap(conceptsBySection, s, p);
+        } else {
+          untaggedConcepts.push(p);
+        }
+      }
+      // Entities (people, companies, projects, deals) follow the same
+      // section routing so "Core knowledge" can also host domain-relevant
+      // entities.
+      for (const p of taggedPages) {
+        const s = frontmatterSectionSlug(p);
+        if (s && sectionSlugs.has(s)) {
+          pushToMap(conceptsBySection, s, p);
+        }
+        // untagged entities stay in the hub-entities block above —
+        // they're not the same shape as concept fallbacks
+      }
+      // Bookmarks route into try-section buckets based on classifier
+      // decisions. The generic hub-try block above caps at 20 across
+      // the whole hub; section-scoped try blocks cap at
+      // TOP_SECTION_TRY each.
+      const allBookmarks = members.filter((p) => p.kind === 'source');
+      for (const p of allBookmarks) {
+        const s = frontmatterSectionSlug(p);
+        if (s && sectionSlugs.has(s)) {
+          pushToMap(tryBySection, s, p);
+        } else {
+          untaggedTry.push(p);
+        }
+      }
+
+      for (const slug of sectionSlugs) {
+        const pagesBlockName = `section-pages:${slug}`;
+        const tryBlockName = `section-try:${slug}`;
+        if (hasManagedBlock(parsed.body, pagesBlockName)) {
+          const sectionPages = (conceptsBySection.get(slug) ?? []).sort(
+            byConfidenceDesc,
+          );
+          sectionBlocks.push([
+            pagesBlockName,
+            renderConcepts(sectionPages),
+          ]);
+        }
+        if (hasManagedBlock(parsed.body, tryBlockName)) {
+          const sectionTry = (tryBySection.get(slug) ?? [])
+            .sort(byHubPriorityDesc)
+            .slice(0, TOP_SECTION_TRY);
+          sectionBlocks.push([
+            tryBlockName,
+            renderThingsToTry(sectionTry),
+          ]);
+        }
+      }
+
+      // Catch-all "everything-else" buckets for pages/bookmarks tagged
+      // to this hub but without a hubSection. Only rendered if the hub
+      // page declares the catch-all managed block.
+      if (hasManagedBlock(parsed.body, 'section-pages:everything-else')) {
+        sectionBlocks.push([
+          'section-pages:everything-else',
+          renderConcepts(untaggedConcepts.sort(byConfidenceDesc)),
+        ]);
+      }
+      if (hasManagedBlock(parsed.body, 'section-try:everything-else')) {
+        sectionBlocks.push([
+          'section-try:everything-else',
+          renderThingsToTry(
+            untaggedTry.sort(byHubPriorityDesc).slice(0, TOP_SECTION_TRY),
+          ),
+        ]);
+      }
+    }
+
     // Only rewrite blocks the hub template actually declares. This
     // prevents `home.md` — which has a smaller block set — from
     // getting irrelevant blocks appended at the bottom.
     let newBody = parsed.body;
-    for (const [name, body] of blocks) {
+    for (const [name, body] of [...blocks, ...sectionBlocks]) {
       if (!hasManagedBlock(newBody, name)) continue;
       newBody = replaceManagedBlock(newBody, name, body);
     }
@@ -255,6 +355,40 @@ function allTaggedPages(
 
 function hasManagedBlock(body: string, markerName: string): boolean {
   return body.includes(`openclaw:wiki:${markerName}:start`);
+}
+
+/**
+ * Parse the set of section-pages:*, section-try:* managed block markers
+ * declared in a hub page body. Returns the section slugs (without the
+ * `section-pages:` / `section-try:` prefix, without `:start` / `:end`).
+ * The catch-all `everything-else` slug is intentionally included here so
+ * the filter loop considers it alongside named sections.
+ */
+function parseDeclaredSectionSlugs(body: string): Set<string> {
+  const slugs = new Set<string>();
+  const re = /openclaw:wiki:section-(?:pages|try):([a-z0-9-]+):start/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    slugs.add(m[1]);
+  }
+  slugs.delete('everything-else'); // handled separately
+  return slugs;
+}
+
+/** Normalise a frontmatter `hubSection` value to a slug comparable to
+ *  the one parsed out of managed block markers. */
+function frontmatterSectionSlug(page: VaultPageRecord): string | null {
+  const raw = page.frontmatter.hubSection;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return null;
+  return trimmed.replace(/\s+/g, '-');
+}
+
+function pushToMap<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const bucket = map.get(key);
+  if (bucket) bucket.push(value);
+  else map.set(key, [value]);
 }
 
 // =============================================================================

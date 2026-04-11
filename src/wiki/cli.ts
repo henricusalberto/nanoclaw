@@ -665,10 +665,14 @@ async function main(): Promise<void> {
       return;
     }
     case 'classify-bookmarks': {
+      const reclassifyMissingSection = flags.includes('--reclassify-sections');
       console.log(
-        `Classifying X bookmarks (${apply ? 'APPLY' : 'DRY RUN'}): ${vaultPath}`,
+        `Classifying X bookmarks (${apply ? 'APPLY' : 'DRY RUN'}${reclassifyMissingSection ? ', RECLASSIFY-SECTIONS' : ''}): ${vaultPath}`,
       );
-      const result = await classifyBookmarks(vaultPath, { apply });
+      const result = await classifyBookmarks(vaultPath, {
+        apply,
+        reclassifyMissingSection,
+      });
       console.log('\nClassify complete:');
       console.log(`  Scanned:            ${result.scanned}`);
       console.log(`  Already classified: ${result.alreadyClassified}`);
