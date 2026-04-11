@@ -207,19 +207,13 @@ export function projectHubs(
           const sectionPages = (conceptsBySection.get(slug) ?? []).sort(
             byConfidenceDesc,
           );
-          sectionBlocks.push([
-            pagesBlockName,
-            renderConcepts(sectionPages),
-          ]);
+          sectionBlocks.push([pagesBlockName, renderConcepts(sectionPages)]);
         }
         if (hasManagedBlock(parsed.body, tryBlockName)) {
           const sectionTry = (tryBySection.get(slug) ?? [])
             .sort(byHubPriorityDesc)
             .slice(0, TOP_SECTION_TRY);
-          sectionBlocks.push([
-            tryBlockName,
-            renderThingsToTry(sectionTry),
-          ]);
+          sectionBlocks.push([tryBlockName, renderThingsToTry(sectionTry)]);
         }
       }
 

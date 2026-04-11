@@ -26,7 +26,12 @@ import path from 'path';
 
 import { atomicWriteFile } from './fs-util.js';
 import { callClaudeCli } from './extractors/claude-cli.js';
-import { checkDreamBudget, DreamBudgetConfig, markDreamBlocked, recordDreamSpend } from './dream-budget.js';
+import {
+  checkDreamBudget,
+  DreamBudgetConfig,
+  markDreamBlocked,
+  recordDreamSpend,
+} from './dream-budget.js';
 import { parseWikiPage } from './markdown.js';
 import { vaultPaths } from './paths.js';
 import { TIER_USD_ESTIMATE } from './tier.js';
@@ -231,7 +236,10 @@ function parseExistingSectionsFromBody(body: string): string[] {
 function collectEverythingElse(
   vaultPath: string,
   hubSlug: string,
-): { everythingElseBookmarks: BookmarkSummary[]; everythingElsePages: PageSummary[] } {
+): {
+  everythingElseBookmarks: BookmarkSummary[];
+  everythingElsePages: PageSummary[];
+} {
   const bookmarks: BookmarkSummary[] = [];
   const pages: PageSummary[] = [];
 
@@ -257,8 +265,7 @@ function collectEverythingElse(
       if (parsed.frontmatter.hubSection !== 'everything-else') continue;
 
       const meta =
-        (parsed.frontmatter.extractorMetadata as Record<string, unknown>) ||
-        {};
+        (parsed.frontmatter.extractorMetadata as Record<string, unknown>) || {};
       bookmarks.push({
         id: typeof meta.id === 'string' ? meta.id : name,
         oneLiner:
@@ -435,8 +442,7 @@ async function runSonnetProposer(
       sampleMembers: Array.isArray(s.sampleMembers)
         ? s.sampleMembers.filter((m): m is string => typeof m === 'string')
         : [],
-      estimatedSize:
-        typeof s.estimatedSize === 'number' ? s.estimatedSize : 0,
+      estimatedSize: typeof s.estimatedSize === 'number' ? s.estimatedSize : 0,
     }))
     .filter((s) => s.heading && s.slug);
 

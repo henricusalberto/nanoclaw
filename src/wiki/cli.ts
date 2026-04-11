@@ -853,9 +853,7 @@ async function main(): Promise<void> {
         'sections-proposal.md',
       );
       if (!fs.existsSync(proposedPath)) {
-        console.error(
-          `apply-sections: no proposal found at ${proposedPath}`,
-        );
+        console.error(`apply-sections: no proposal found at ${proposedPath}`);
         console.error(
           'Generate one first via `wiki propose-sections`, then retry.',
         );
