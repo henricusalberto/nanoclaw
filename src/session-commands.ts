@@ -111,7 +111,11 @@ export async function handleSessionCommand(opts: {
 
   if (!command || !cmdMsg) return { handled: false };
 
-  if (!isSessionCommandAllowed(isMainGroup, cmdMsg.is_from_me === true)) {
+  // Truthy check (not `=== true`): messages delivered fresh from the channel
+  // have `is_from_me: boolean`, but messages round-tripped through the SQLite
+  // `messages` table come back as `1`/`0` numbers — and `1 === true` is false
+  // in JavaScript. Use `!!` so both shapes work.
+  if (!isSessionCommandAllowed(isMainGroup, !!cmdMsg.is_from_me)) {
     // DENIED: send denial if the sender would normally be allowed to interact,
     // then silently consume the command by advancing the cursor past it.
     // Trade-off: other messages in the same batch are also consumed (cursor is

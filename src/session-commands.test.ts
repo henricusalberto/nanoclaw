@@ -68,9 +68,9 @@ describe('extractSessionCommand', () => {
       '/compact',
     );
     expect(extractSessionCommand('/wrap@SomeBot', trigger)).toBe('/wrap');
-    expect(extractSessionCommand('@Andy /compact@Janus_Nano_Bot', trigger)).toBe(
-      '/compact',
-    );
+    expect(
+      extractSessionCommand('@Andy /compact@Janus_Nano_Bot', trigger),
+    ).toBe('/compact');
   });
 
   it('normalises case to lowercase', () => {
@@ -240,6 +240,34 @@ describe('handleSessionCommand', () => {
     expect(deps.runAgent).toHaveBeenCalledWith(
       '/compact',
       expect.any(Function),
+    );
+  });
+
+  it('treats is_from_me coming back from SQLite as 1 as truthy', async () => {
+    // better-sqlite3 returns INTEGER columns as numbers, not booleans, so
+    // round-tripped messages arrive with is_from_me: 1 (not true). The auth
+    // check must tolerate that — `1 === true` is false in JavaScript.
+    const deps = makeDeps();
+    const result = await handleSessionCommand({
+      // Cast through unknown because the TS type declares boolean, but the
+      // runtime value from SQLite is a number — exactly the shape that
+      // broke the original `=== true` comparison in production.
+      missedMessages: [
+        makeMsg('/compact', { is_from_me: 1 as unknown as boolean }),
+      ],
+      isMainGroup: false,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.runAgent).toHaveBeenCalledWith(
+      '/compact',
+      expect.any(Function),
+    );
+    expect(deps.sendMessage).not.toHaveBeenCalledWith(
+      'Session commands require admin access.',
     );
   });
 
