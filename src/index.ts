@@ -270,16 +270,9 @@ async function runAgentWithChatUX(
   channel: Channel,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
-  logger.info(
-    { group: group.name, prompt: prompt.slice(0, 60) },
-    'CHATUX: runAgentWithChatUX start, firing initial typing',
-  );
   await channel.setTyping?.(chatJid, true);
   // Telegram typing indicators auto-expire after ~5s. Keep refreshing.
-  let typingPulseCount = 0;
   const typingInterval = setInterval(() => {
-    typingPulseCount++;
-    logger.info({ group: group.name, pulse: typingPulseCount }, 'CHATUX: typing pulse');
     channel.setTyping?.(chatJid, true).catch(() => {});
   }, 4_000);
 
@@ -303,17 +296,9 @@ async function runAgentWithChatUX(
   };
 
   const onStatus = (event: StatusEvent): void => {
-    logger.info({ group: group.name, event }, 'CHATUX: status event received');
     const text = formatStatusEvent(event);
-    if (!text) {
-      logger.info({ group: group.name, event }, 'CHATUX: status event produced no text, skipping');
-      return;
-    }
-    if (statusThrottleTimer) {
-      logger.info({ group: group.name }, 'CHATUX: status throttled, skipping');
-      return;
-    }
-    logger.info({ group: group.name, text }, 'CHATUX: flushing status to chat');
+    if (!text) return;
+    if (statusThrottleTimer) return;
     flushStatus(text);
     statusThrottleTimer = setTimeout(() => {
       statusThrottleTimer = null;

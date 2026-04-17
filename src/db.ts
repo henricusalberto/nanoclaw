@@ -353,9 +353,18 @@ export function getNewMessages(
     ) ORDER BY timestamp
   `;
 
-  const rows = db
+  const rawRows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as Array<
+    Omit<NewMessage, 'is_from_me'> & { is_from_me: number | null }
+  >;
+  // Normalise is_from_me: SQLite stores it as INTEGER (1/0/null). Callers
+  // expect the declared boolean type — in particular `=== true` comparisons
+  // in auth checks fail silently for the `1` shape.
+  const rows: NewMessage[] = rawRows.map((r) => ({
+    ...r,
+    is_from_me: r.is_from_me === 1,
+  }));
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -386,9 +395,13 @@ export function getMessagesSince(
       LIMIT ?
     ) ORDER BY timestamp
   `;
-  return db
+  const rawRows = db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as Array<
+    Omit<NewMessage, 'is_from_me'> & { is_from_me: number | null }
+  >;
+  // Normalise is_from_me number→boolean so downstream === true checks work.
+  return rawRows.map((r) => ({ ...r, is_from_me: r.is_from_me === 1 }));
 }
 
 export function getLastBotMessageTimestamp(
