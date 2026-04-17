@@ -21,6 +21,7 @@ import {
 } from './channels/registry.js';
 import {
   ContainerOutput,
+  StatusEvent,
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
@@ -219,6 +220,117 @@ export function _setRegisteredGroups(
   registeredGroups = groups;
 }
 
+const TOOL_LABELS: Record<string, string> = {
+  Read: '📄 Reading',
+  Write: '✏️ Writing',
+  Edit: '✏️ Editing',
+  Grep: '🔍 Searching',
+  Glob: '📂 Finding files',
+  Bash: '⚙️ Running command',
+  WebSearch: '🌐 Searching web',
+  WebFetch: '🌐 Fetching page',
+  Agent: '🤖 Delegating',
+  Task: '📋 Managing tasks',
+};
+const STATUS_THROTTLE_MS = 2_000;
+
+function formatStatusEvent(event: StatusEvent): string {
+  if (event.type === 'tool_start' && event.tool) {
+    const tool = event.tool.replace(/^mcp__nanoclaw__/, '');
+    const label =
+      TOOL_LABELS[tool] ||
+      (tool.includes('wiki_')
+        ? '📚 Wiki'
+        : tool.includes('qmd_')
+          ? '🔍 Memory'
+          : `🔧 ${tool}`);
+    return event.input ? `${label}: ${event.input}` : label;
+  }
+  if (event.type === 'tool_done' && event.summary) {
+    return `✓ ${event.summary.slice(0, 80)}`;
+  }
+  if (event.type === 'compacting') return '🔄 Compacting conversation context...';
+  if (event.type === 'compact_done') return '✓ Context compacted';
+  return '';
+}
+
+/**
+ * Run the agent with full chat UX: persistent typing indicator + an
+ * ephemeral tool-use status message that updates as the agent works and is
+ * deleted when the real response arrives. Used by both the regular message
+ * path and the session-command path so slash commands (/compact, /wrap,
+ * /status, ...) get the same feedback that a user @-mentioning the agent
+ * would see.
+ */
+async function runAgentWithChatUX(
+  group: RegisteredGroup,
+  prompt: string,
+  chatJid: string,
+  channel: Channel,
+  onOutput?: (output: ContainerOutput) => Promise<void>,
+): Promise<'success' | 'error'> {
+  await channel.setTyping?.(chatJid, true);
+  // Telegram typing indicators auto-expire after ~5s. Keep refreshing.
+  const typingInterval = setInterval(() => {
+    channel.setTyping?.(chatJid, true).catch(() => {});
+  }, 4_000);
+
+  let statusMsgId: string | null = null;
+  let lastStatusText = '';
+  let statusThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushStatus = async (text: string): Promise<void> => {
+    if (!text || text === lastStatusText) return;
+    lastStatusText = text;
+    try {
+      if (!statusMsgId) {
+        statusMsgId =
+          (await channel.sendStatusMessage?.(chatJid, text)) ?? null;
+      } else {
+        await channel.editStatusMessage?.(chatJid, statusMsgId, text);
+      }
+    } catch {
+      // Status messages are best-effort
+    }
+  };
+
+  const onStatus = (event: StatusEvent): void => {
+    const text = formatStatusEvent(event);
+    if (!text) return;
+    if (statusThrottleTimer) return;
+    flushStatus(text);
+    statusThrottleTimer = setTimeout(() => {
+      statusThrottleTimer = null;
+    }, STATUS_THROTTLE_MS);
+  };
+
+  // Wrap caller's onOutput to delete the status message before the real reply
+  const wrappedOutput = onOutput
+    ? async (result: ContainerOutput): Promise<void> => {
+        if (result.result && statusMsgId) {
+          await channel
+            .deleteStatusMessage?.(chatJid, statusMsgId)
+            .catch(() => {});
+          statusMsgId = null;
+        }
+        await onOutput(result);
+      }
+    : undefined;
+
+  try {
+    return await runAgent(group, prompt, chatJid, wrappedOutput, onStatus);
+  } finally {
+    clearInterval(typingInterval);
+    if (statusThrottleTimer) clearTimeout(statusThrottleTimer);
+    if (statusMsgId) {
+      await channel
+        .deleteStatusMessage?.(chatJid, statusMsgId)
+        .catch(() => {});
+    }
+    await channel.setTyping?.(chatJid, false).catch(() => {});
+  }
+}
+
 /**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
@@ -257,7 +369,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) =>
-        runAgent(group, prompt, chatJid, onOutput),
+        runAgentWithChatUX(group, prompt, chatJid, channel, onOutput),
       closeStdin: () => queue.closeStdin(chatJid),
       advanceCursor: (ts) => {
         lastAgentTimestamp[chatJid] = ts;
@@ -323,36 +435,130 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+  // Telegram typing indicators auto-expire after ~5s. Repeat every 4s so the
+  // user always sees "typing..." while the container is processing.
+  const typingInterval = setInterval(() => {
+    channel.setTyping?.(chatJid, true).catch(() => {});
+  }, 4_000);
+
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  // Ephemeral status message: sent on first tool call, edited with updates,
+  // deleted when the real response arrives. User sees what the agent is doing
+  // but the chat stays clean.
+  let statusMsgId: string | null = null;
+  let lastStatusText = '';
+  let statusThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+  const STATUS_THROTTLE_MS = 2_000; // min interval between edits
+
+  const TOOL_LABELS: Record<string, string> = {
+    Read: '📄 Reading',
+    Write: '✏️ Writing',
+    Edit: '✏️ Editing',
+    Grep: '🔍 Searching',
+    Glob: '📂 Finding files',
+    Bash: '⚙️ Running command',
+    WebSearch: '🌐 Searching web',
+    WebFetch: '🌐 Fetching page',
+    Agent: '🤖 Delegating',
+    Task: '📋 Managing tasks',
+  };
+
+  function formatStatus(event: StatusEvent): string {
+    if (event.type === 'tool_start' && event.tool) {
+      const tool = event.tool.replace(/^mcp__nanoclaw__/, '');
+      const label =
+        TOOL_LABELS[tool] ||
+        (tool.includes('wiki_')
+          ? '📚 Wiki'
+          : tool.includes('qmd_')
+            ? '🔍 Memory'
+            : `🔧 ${tool}`);
+      return event.input ? `${label}: ${event.input}` : label;
+    }
+    if (event.type === 'tool_done' && event.summary) {
+      return `✓ ${event.summary.slice(0, 80)}`;
+    }
+    if (event.type === 'compacting') {
+      return '🔄 Compacting conversation context...';
+    }
+    if (event.type === 'compact_done') {
+      return '✓ Context compacted';
+    }
+    return '';
+  }
+
+  const flushStatus = async (text: string) => {
+    if (!text || text === lastStatusText) return;
+    lastStatusText = text;
+    try {
+      if (!statusMsgId) {
+        statusMsgId =
+          (await channel.sendStatusMessage?.(chatJid, text)) ?? null;
+      } else {
+        await channel.editStatusMessage?.(chatJid, statusMsgId, text);
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
+    } catch {
+      // Status messages are best-effort
     }
+  };
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+  const onStatus = (event: StatusEvent) => {
+    const text = formatStatus(event);
+    if (!text) return;
+    // Throttle edits to avoid Telegram rate limits
+    if (statusThrottleTimer) return; // skip if throttled
+    flushStatus(text);
+    statusThrottleTimer = setTimeout(() => {
+      statusThrottleTimer = null;
+    }, STATUS_THROTTLE_MS);
+  };
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          // Delete the ephemeral status message before sending the real response
+          if (statusMsgId) {
+            await channel.deleteStatusMessage?.(chatJid, statusMsgId);
+            statusMsgId = null;
+          }
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
+      }
 
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
+
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+    onStatus,
+  );
+
+  // Clean up status message if still present (e.g. error path, no output)
+  if (statusMsgId) {
+    await channel.deleteStatusMessage?.(chatJid, statusMsgId).catch(() => {});
+  }
+  if (statusThrottleTimer) clearTimeout(statusThrottleTimer);
+  clearInterval(typingInterval);
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
@@ -384,6 +590,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  onStatus?: (event: import('./container-runner.js').StatusEvent) => void,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -439,6 +646,7 @@ async function runAgent(
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
+      onStatus,
     );
 
     if (output.newSessionId) {
@@ -586,11 +794,14 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
-            logger.debug(
-              { chatJid, count: messagesToSend.length },
-              'Piped messages to active container',
-            );
+          const piped = queue.sendMessage(chatJid, formatted);
+          logger.info(
+            { chatJid, piped, count: messagesToSend.length },
+            piped
+              ? 'Piped messages to active container'
+              : 'No active container, enqueueing',
+          );
+          if (piped) {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
