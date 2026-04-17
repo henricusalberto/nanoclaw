@@ -249,7 +249,8 @@ function formatStatusEvent(event: StatusEvent): string {
   if (event.type === 'tool_done' && event.summary) {
     return `✓ ${event.summary.slice(0, 80)}`;
   }
-  if (event.type === 'compacting') return '🔄 Compacting conversation context...';
+  if (event.type === 'compacting')
+    return '🔄 Compacting conversation context...';
   if (event.type === 'compact_done') return '✓ Context compacted';
   return '';
 }
@@ -269,9 +270,16 @@ async function runAgentWithChatUX(
   channel: Channel,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
+  logger.info(
+    { group: group.name, prompt: prompt.slice(0, 60) },
+    'CHATUX: runAgentWithChatUX start, firing initial typing',
+  );
   await channel.setTyping?.(chatJid, true);
   // Telegram typing indicators auto-expire after ~5s. Keep refreshing.
+  let typingPulseCount = 0;
   const typingInterval = setInterval(() => {
+    typingPulseCount++;
+    logger.info({ group: group.name, pulse: typingPulseCount }, 'CHATUX: typing pulse');
     channel.setTyping?.(chatJid, true).catch(() => {});
   }, 4_000);
 
@@ -295,9 +303,17 @@ async function runAgentWithChatUX(
   };
 
   const onStatus = (event: StatusEvent): void => {
+    logger.info({ group: group.name, event }, 'CHATUX: status event received');
     const text = formatStatusEvent(event);
-    if (!text) return;
-    if (statusThrottleTimer) return;
+    if (!text) {
+      logger.info({ group: group.name, event }, 'CHATUX: status event produced no text, skipping');
+      return;
+    }
+    if (statusThrottleTimer) {
+      logger.info({ group: group.name }, 'CHATUX: status throttled, skipping');
+      return;
+    }
+    logger.info({ group: group.name, text }, 'CHATUX: flushing status to chat');
     flushStatus(text);
     statusThrottleTimer = setTimeout(() => {
       statusThrottleTimer = null;
@@ -323,9 +339,7 @@ async function runAgentWithChatUX(
     clearInterval(typingInterval);
     if (statusThrottleTimer) clearTimeout(statusThrottleTimer);
     if (statusMsgId) {
-      await channel
-        .deleteStatusMessage?.(chatJid, statusMsgId)
-        .catch(() => {});
+      await channel.deleteStatusMessage?.(chatJid, statusMsgId).catch(() => {});
     }
     await channel.setTyping?.(chatJid, false).catch(() => {});
   }
@@ -749,12 +763,9 @@ async function startMessageLoop(): Promise<void> {
             // Only close active container if the sender is authorized — otherwise an
             // untrusted user could kill in-flight work by sending /compact (DoS).
             // closeStdin no-ops internally when no container is active.
-            if (
-              isSessionCommandAllowed(
-                isMainGroup,
-                loopCmdMsg.is_from_me === true,
-              )
-            ) {
+            // Truthy check (not === true): DB round-tripped messages come back
+            // with is_from_me as `1`, and `1 === true` is false in JavaScript.
+            if (isSessionCommandAllowed(isMainGroup, !!loopCmdMsg.is_from_me)) {
               queue.closeStdin(chatJid);
             }
             // Enqueue so processGroupMessages handles auth + cursor advancement.
