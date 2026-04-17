@@ -45,9 +45,16 @@ vi.mock('grammy', () => ({
     errorHandler: Handler | null = null;
 
     api = {
-      sendMessage: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
       getFile: vi.fn().mockResolvedValue({ file_path: 'photos/file_0.jpg' }),
+      setMyCommands: vi.fn().mockResolvedValue(undefined),
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined),
+      // `raw` exposes low-level Bot API methods not wrapped by grammy helpers
+      raw: {
+        setMessageReaction: vi.fn().mockResolvedValue(undefined),
+      },
     };
 
     constructor(token: string) {
@@ -189,8 +196,14 @@ async function triggerMediaMessage(
 
 // --- Tests ---
 
-// Helper: flush pending microtasks (for async downloadFile().then() chains)
-const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
+// Helper: flush pending microtasks (for async downloadFile().then() chains).
+// Multiple awaits in downloadFile (fetch → arrayBuffer → maybeResizeImage →
+// sharp metadata+resize → writeFile) need several macrotask turns to settle.
+const flushPromises = async () => {
+  for (let i = 0; i < 5; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+};
 
 describe('TelegramChannel', () => {
   beforeEach(() => {

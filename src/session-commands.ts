@@ -2,32 +2,30 @@ import type { NewMessage } from './types.js';
 import { logger } from './logger.js';
 
 /**
- * Matches a bare slash command with no arguments — a leading `/` followed by
- * one or more word characters (letters, digits, underscores, hyphens), and
- * an optional `@botname` suffix.
+ * Matches a slash command: leading `/`, word-character command name, optional
+ * `@botname` suffix (Telegram group-chat tap), optional whitespace + args.
  *
- * The `@botname` tail is what Telegram appends automatically when the user
- * TAPS a command from the `/` autocomplete menu in a group chat (e.g.
- * `/compact@Janus_Nano_Bot`). Without tolerating it here, the most natural
- * way to trigger a command — tap it from the menu — would silently fall
- * through to the normal message path and never reach the SDK.
+ * Capture groups:
+ *   1: `/command` (always present)
+ *   2: `@botname` (optional, Telegram-only; always stripped before dispatch)
+ *   3: arguments (optional, everything after the first whitespace)
  *
- * This is intentionally permissive: it covers the SDK's built-in session
- * commands (`/compact`, `/clear`, `/cost`, `/model`, `/resume`, ...) AND any
- * container skill that the user wants to trigger from chat (`/wrap`,
- * `/status`, `/sunsama`, ...). The SDK will reject commands it doesn't
- * recognise inside the agent — no need to keep a static allowlist here.
+ * Covers SDK built-ins (`/compact`, `/clear`, `/cost`, `/model sonnet`,
+ * `/resume`, ...), container skills (`/wrap`, `/status`, `/sunsama`, ...),
+ * and any future slash command the SDK or a skill adds. The SDK rejects
+ * unknown commands on its side — no allowlist upkeep needed here.
  *
- * Commands with arguments (e.g. `/model sonnet`) are intentionally NOT
- * matched; those carry free-form text and should go through the normal
- * message path to avoid surprising users.
+ * Multi-line input is rejected (args cannot contain newlines) so bare
+ * messages that happen to mention a slash earlier in the line go through
+ * the normal message path.
  */
-const SLASH_COMMAND_PATTERN = /^(\/[a-zA-Z][\w-]*)(@\w+)?$/;
+const SLASH_COMMAND_PATTERN = /^(\/[a-zA-Z][\w-]*)(@\w+)?(?:\s+([^\n]+?))?$/;
 
 /**
  * Extract a session slash command from a message, stripping the trigger prefix if present.
- * Returns the slash command (e.g., '/compact', '/wrap') or null if not a session command.
- * The `@botname` suffix that Telegram auto-appends for group-chat command taps is stripped.
+ * Returns the slash command + optional args (e.g. '/compact', '/model sonnet')
+ * or null if not a session command. The `@botname` suffix that Telegram auto-appends
+ * for group-chat command taps is stripped. Command name is lowercased; args are preserved verbatim.
  */
 export function extractSessionCommand(
   content: string,
@@ -37,8 +35,9 @@ export function extractSessionCommand(
   text = text.replace(triggerPattern, '').trim();
   const match = SLASH_COMMAND_PATTERN.exec(text);
   if (!match) return null;
-  // match[1] is the command without the @botname tail
-  return match[1].toLowerCase();
+  const command = match[1].toLowerCase();
+  const args = match[3]?.trim();
+  return args ? `${command} ${args}` : command;
 }
 
 /**

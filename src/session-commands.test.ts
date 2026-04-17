@@ -34,12 +34,25 @@ describe('extractSessionCommand', () => {
     expect(extractSessionCommand('/v2', trigger)).toBe('/v2');
   });
 
-  it('rejects slash commands with arguments', () => {
-    // Commands with args carry free-form text; let them go through the
-    // normal message path rather than round-tripping through the SDK as
-    // a slash command.
-    expect(extractSessionCommand('/compact now please', trigger)).toBeNull();
-    expect(extractSessionCommand('/model sonnet', trigger)).toBeNull();
+  it('accepts slash commands with arguments and preserves them verbatim', () => {
+    // SDK built-ins like `/model` take arguments. Forward the whole thing.
+    expect(extractSessionCommand('/model sonnet', trigger)).toBe(
+      '/model sonnet',
+    );
+    expect(extractSessionCommand('/compact now please', trigger)).toBe(
+      '/compact now please',
+    );
+    // Args preserved verbatim even when they contain mixed case
+    expect(extractSessionCommand('/model CLAUDE-OPUS', trigger)).toBe(
+      '/model CLAUDE-OPUS',
+    );
+  });
+
+  it('strips @botname before arguments', () => {
+    // Telegram group-chat taps may produce `/model@Bot_Name arg1 arg2`.
+    expect(extractSessionCommand('/model@Janus_Nano_Bot sonnet', trigger)).toBe(
+      '/model sonnet',
+    );
   });
 
   it('rejects regular messages', () => {
