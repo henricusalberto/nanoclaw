@@ -60,6 +60,19 @@ describe('extractSessionCommand', () => {
     expect(extractSessionCommand('\n/wrap\n', trigger)).toBe('/wrap');
   });
 
+  it('strips Telegram @botname suffix from group-chat command taps', () => {
+    // When the user taps a command from Telegram's `/` menu in a group,
+    // Telegram appends `@<bot_username>` to the command text. We must
+    // strip that before dispatching.
+    expect(extractSessionCommand('/compact@Janus_Nano_Bot', trigger)).toBe(
+      '/compact',
+    );
+    expect(extractSessionCommand('/wrap@SomeBot', trigger)).toBe('/wrap');
+    expect(extractSessionCommand('@Andy /compact@Janus_Nano_Bot', trigger)).toBe(
+      '/compact',
+    );
+  });
+
   it('normalises case to lowercase', () => {
     // Chat-friendly: `/Compact` from mobile autocapitalise becomes `/compact`
     // so the SDK still recognises it.

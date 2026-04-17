@@ -3,7 +3,14 @@ import { logger } from './logger.js';
 
 /**
  * Matches a bare slash command with no arguments — a leading `/` followed by
- * one or more word characters (letters, digits, underscores, hyphens).
+ * one or more word characters (letters, digits, underscores, hyphens), and
+ * an optional `@botname` suffix.
+ *
+ * The `@botname` tail is what Telegram appends automatically when the user
+ * TAPS a command from the `/` autocomplete menu in a group chat (e.g.
+ * `/compact@Janus_Nano_Bot`). Without tolerating it here, the most natural
+ * way to trigger a command — tap it from the menu — would silently fall
+ * through to the normal message path and never reach the SDK.
  *
  * This is intentionally permissive: it covers the SDK's built-in session
  * commands (`/compact`, `/clear`, `/cost`, `/model`, `/resume`, ...) AND any
@@ -15,11 +22,12 @@ import { logger } from './logger.js';
  * matched; those carry free-form text and should go through the normal
  * message path to avoid surprising users.
  */
-const SLASH_COMMAND_PATTERN = /^\/[a-zA-Z][\w-]*$/;
+const SLASH_COMMAND_PATTERN = /^(\/[a-zA-Z][\w-]*)(@\w+)?$/;
 
 /**
  * Extract a session slash command from a message, stripping the trigger prefix if present.
  * Returns the slash command (e.g., '/compact', '/wrap') or null if not a session command.
+ * The `@botname` suffix that Telegram auto-appends for group-chat command taps is stripped.
  */
 export function extractSessionCommand(
   content: string,
@@ -27,8 +35,10 @@ export function extractSessionCommand(
 ): string | null {
   let text = content.trim();
   text = text.replace(triggerPattern, '').trim();
-  if (!SLASH_COMMAND_PATTERN.test(text)) return null;
-  return text.toLowerCase();
+  const match = SLASH_COMMAND_PATTERN.exec(text);
+  if (!match) return null;
+  // match[1] is the command without the @botname tail
+  return match[1].toLowerCase();
 }
 
 /**
