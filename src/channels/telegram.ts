@@ -45,16 +45,55 @@ async function sendTelegramMessage(
   }
 }
 
+/**
+ * Commands advertised via Telegram's in-UI `/` menu. When the user types `/`
+ * in any chat with the bot, Telegram shows this list as autocomplete.
+ *
+ * Keep in sync with what `extractSessionCommand` accepts in
+ * session-commands.ts — only commands that round-trip cleanly through the
+ * SDK belong here.
+ */
+const TELEGRAM_BOT_COMMAND_MENU: Array<{
+  command: string;
+  description: string;
+}> = [
+  {
+    command: 'compact',
+    description: 'Compact the conversation to free context',
+  },
+  { command: 'clear', description: 'Start a fresh conversation' },
+  { command: 'cost', description: 'Show token usage for this session' },
+  { command: 'model', description: 'Show which Claude model is active' },
+  { command: 'wrap', description: 'End-of-session wrap: archive + memory' },
+  { command: 'status', description: 'Show NanoClaw health and queue status' },
+];
+
 export class TelegramChannel implements Channel {
   name = 'telegram';
 
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  private adminUserId: string | null;
 
-  constructor(botToken: string, opts: TelegramChannelOpts) {
+  constructor(
+    botToken: string,
+    opts: TelegramChannelOpts,
+    adminUserId: string | null = null,
+  ) {
     this.botToken = botToken;
     this.opts = opts;
+    this.adminUserId = adminUserId;
+  }
+
+  /**
+   * Whether a Telegram user ID matches the configured admin. Used to set
+   * `is_from_me` so session commands (like /compact, /wrap) work for the
+   * bot owner in any registered group, not just the main group.
+   */
+  private isAdmin(userId: number | string | undefined): boolean {
+    if (!this.adminUserId || userId === undefined) return false;
+    return String(userId) === this.adminUserId;
   }
 
   /**
@@ -114,6 +153,19 @@ export class TelegramChannel implements Channel {
         baseFetchConfig: { agent: https.globalAgent, compress: true },
       },
     });
+
+    // Register the `/` autocomplete menu once at startup so Telegram shows
+    // the list of useful commands whenever the user types `/` in any chat.
+    // Non-fatal if this call fails (network hiccups, token scope limits).
+    try {
+      await this.bot.api.setMyCommands(TELEGRAM_BOT_COMMAND_MENU);
+      logger.info(
+        { count: TELEGRAM_BOT_COMMAND_MENU.length },
+        'Telegram command menu registered',
+      );
+    } catch (err) {
+      logger.warn({ err }, 'Telegram setMyCommands failed');
+    }
 
     // Command to get chat ID (useful for registration)
     this.bot.command('chatid', (ctx) => {
@@ -239,7 +291,7 @@ export class TelegramChannel implements Channel {
         sender_name: senderName,
         content,
         timestamp,
-        is_from_me: false,
+        is_from_me: this.isAdmin(ctx.from?.id),
         thread_id: threadId ? threadId.toString() : undefined,
         reply_to_message_id: replyToMessageId,
         reply_to_message_content: replyToContent,
@@ -291,7 +343,7 @@ export class TelegramChannel implements Channel {
           sender_name: senderName,
           content,
           timestamp,
-          is_from_me: false,
+          is_from_me: this.isAdmin(ctx.from?.id),
           thread_id: threadId ? threadId.toString() : undefined,
         });
       };
@@ -457,12 +509,24 @@ export class TelegramChannel implements Channel {
 }
 
 registerChannel('telegram', (opts: ChannelOpts) => {
-  const envVars = readEnvFile(['TELEGRAM_BOT_TOKEN']);
+  const envVars = readEnvFile(['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ADMIN_ID']);
   const token =
     process.env.TELEGRAM_BOT_TOKEN || envVars.TELEGRAM_BOT_TOKEN || '';
   if (!token) {
     logger.warn('Telegram: TELEGRAM_BOT_TOKEN not set');
     return null;
   }
-  return new TelegramChannel(token, opts);
+  // TELEGRAM_ADMIN_ID is your numeric Telegram user ID. Messages from this
+  // user get `is_from_me: true`, which unlocks session commands (/compact,
+  // /wrap, ...) in every registered group — not just the main group.
+  // Get it from @userinfobot or `/chatid` in a private chat with the bot.
+  const rawAdminId =
+    process.env.TELEGRAM_ADMIN_ID || envVars.TELEGRAM_ADMIN_ID || '';
+  const adminUserId = rawAdminId.trim() || null;
+  if (!adminUserId) {
+    logger.warn(
+      'Telegram: TELEGRAM_ADMIN_ID not set — session commands will only work in the main group',
+    );
+  }
+  return new TelegramChannel(token, opts, adminUserId);
 });
