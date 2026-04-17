@@ -103,15 +103,67 @@ class MessageStream {
   }
 }
 
-async function readStdin(): Promise<string> {
+/**
+ * Read the first complete JSON object from stdin (delimited by newline).
+ * After this returns, stdin remains open for IPC messages.
+ */
+async function readFirstLine(): Promise<string> {
   return new Promise((resolve, reject) => {
-    let data = '';
+    let buffer = '';
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => {
-      data += chunk;
-    });
-    process.stdin.on('end', () => resolve(data));
+    const onData = (chunk: string) => {
+      buffer += chunk;
+      const newlineIdx = buffer.indexOf('\n');
+      if (newlineIdx !== -1) {
+        process.stdin.removeListener('data', onData);
+        process.stdin.removeListener('error', reject);
+        resolve(buffer.slice(0, newlineIdx));
+        // Leave the rest (if any) in the buffer for the IPC line reader
+        const remainder = buffer.slice(newlineIdx + 1);
+        if (remainder) process.stdin.unshift(remainder);
+      }
+    };
+    process.stdin.on('data', onData);
     process.stdin.on('error', reject);
+    // Fallback: if stdin closes before newline, use whatever we got
+    process.stdin.on('end', () => {
+      if (buffer) resolve(buffer);
+      else reject(new Error('stdin closed without data'));
+    });
+  });
+}
+
+/**
+ * Set up a line reader on stdin for IPC messages.
+ * Each line is a JSON object: {"type":"message","text":"..."}
+ * Calls onMessage for each valid message.
+ */
+function setupStdinIpc(onMessage: (text: string) => void, onClose: () => void): void {
+  let buffer = '';
+  process.stdin.on('data', (chunk: string) => {
+    buffer += chunk;
+    let newlineIdx: number;
+    while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, newlineIdx).trim();
+      buffer = buffer.slice(newlineIdx + 1);
+      if (!line) continue;
+      try {
+        const data = JSON.parse(line);
+        if (data.type === 'message' && data.text) {
+          log(`[STDIN-IPC] Received message (${data.text.length} chars)`);
+          onMessage(data.text);
+        } else if (data.type === 'close') {
+          log('[STDIN-IPC] Close signal received');
+          onClose();
+        }
+      } catch {
+        log(`[STDIN-IPC] Failed to parse line: ${line.slice(0, 100)}`);
+      }
+    }
+  });
+  process.stdin.on('end', () => {
+    log('[STDIN-IPC] stdin closed');
+    onClose();
   });
 }
 
@@ -126,6 +178,28 @@ function writeOutput(output: ContainerOutput): void {
 
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
+}
+
+/** Build a short human-readable description of what a tool is doing. */
+function summarizeToolInput(toolName: string | undefined, input: unknown): string {
+  if (!toolName || !input || typeof input !== 'object') return '';
+  const inp = input as Record<string, unknown>;
+  switch (toolName) {
+    case 'Read': return typeof inp.file_path === 'string' ? inp.file_path.split('/').pop() || '' : '';
+    case 'Write': case 'Edit': return typeof inp.file_path === 'string' ? inp.file_path.split('/').pop() || '' : '';
+    case 'Grep': return typeof inp.pattern === 'string' ? inp.pattern.slice(0, 40) : '';
+    case 'Glob': return typeof inp.pattern === 'string' ? inp.pattern : '';
+    case 'Bash': return typeof inp.command === 'string' ? inp.command.slice(0, 50) : '';
+    case 'WebSearch': return typeof inp.query === 'string' ? inp.query.slice(0, 50) : '';
+    case 'WebFetch': return typeof inp.url === 'string' ? inp.url.slice(0, 60) : '';
+    default:
+      // MCP tools: mcp__nanoclaw__wiki_search, qmd_search, etc.
+      if (toolName.includes('wiki_search') || toolName.includes('qmd_search'))
+        return typeof inp.query === 'string' ? inp.query.slice(0, 50) : '';
+      if (toolName.includes('wiki_get'))
+        return typeof inp.page === 'string' ? inp.page : '';
+      return '';
+  }
 }
 
 function getSessionSummary(
@@ -346,10 +420,11 @@ function shouldClose(): boolean {
 function drainIpcInput(): string[] {
   try {
     fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
-    const files = fs
-      .readdirSync(IPC_INPUT_DIR)
-      .filter((f) => f.endsWith('.json'))
-      .sort();
+    const allFiles = fs.readdirSync(IPC_INPUT_DIR);
+    const files = allFiles.filter((f) => f.endsWith('.json')).sort();
+    if (files.length > 0) {
+      log(`[IPC-DRAIN] Found ${files.length} files: ${files.join(', ')}`);
+    }
 
     const messages: string[] = [];
     for (const file of files) {
@@ -413,6 +488,7 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
+  drainAllIpcFn: () => string[] = drainIpcInput,
 ): Promise<{
   newSessionId?: string;
   lastAssistantUuid?: string;
@@ -424,8 +500,13 @@ async function runQuery(
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
   let closedDuringQuery = false;
+  let ipcPollCount = 0;
   const pollIpcDuringQuery = () => {
-    if (!ipcPolling) return;
+    if (!ipcPolling) {
+      log(`[IPC-POLL] stopped (ipcPolling=false) after ${ipcPollCount} polls`);
+      return;
+    }
+    ipcPollCount++;
     if (shouldClose()) {
       log('Close sentinel detected during query, ending stream');
       closedDuringQuery = true;
@@ -433,10 +514,16 @@ async function runQuery(
       ipcPolling = false;
       return;
     }
-    const messages = drainIpcInput();
-    for (const text of messages) {
-      log(`Piping IPC message into active query (${text.length} chars)`);
-      stream.push(text);
+    const messages = drainAllIpcFn();
+    if (messages.length > 0) {
+      for (const text of messages) {
+        log(`Piping IPC message into active query (${text.length} chars)`);
+        stream.push(text);
+      }
+    }
+    // Log every 60s to confirm polling is alive
+    if (ipcPollCount % 120 === 0) {
+      log(`[IPC-POLL] alive, ${ipcPollCount} polls, ipcPolling=${ipcPolling}`);
     }
     setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
   };
@@ -452,6 +539,70 @@ async function runQuery(
   let globalClaudeMd: string | undefined;
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  }
+
+  // Append compact wiki digest to system prompt so the agent always knows
+  // what's in the wiki without searching. Matches OpenClaw's
+  // includeCompiledDigestPrompt behavior.
+  const wikiVaultPath = process.env.NANOCLAW_WIKI_VAULT_PATH;
+  if (wikiVaultPath) {
+    const digestPath = path.join(
+      wikiVaultPath,
+      '.openclaw-wiki',
+      'cache',
+      'agent-digest.json',
+    );
+    try {
+      if (fs.existsSync(digestPath)) {
+        const digest = JSON.parse(fs.readFileSync(digestPath, 'utf-8'));
+        const counts = digest.pageCounts || {};
+        const health = digest.claimHealth || {};
+        const freshness = health.freshness || {};
+        const totalPages = Object.values(counts).reduce(
+          (s: number, n) => s + (n as number),
+          0,
+        );
+        const pages = (digest.pages || []) as Array<{
+          title: string;
+          kind: string;
+          claimCount: number;
+          confidence: number;
+        }>;
+        const topPages = [...pages]
+          .filter((p) => p.claimCount > 0)
+          .sort((a, b) => b.claimCount - a.claimCount)
+          .slice(0, 10)
+          .map(
+            (p) =>
+              `- ${p.title} (${p.kind}, ${p.claimCount} claims, confidence ${p.confidence ?? '?'})`,
+          )
+          .join('\n');
+
+        const digestSummary = [
+          '',
+          '## Wiki Digest (pre-compiled, auto-loaded into this prompt)',
+          '',
+          'This section IS the compiled wiki digest (from `agent-digest.json`). It is already loaded into your context. You do not need to compile it, generate it, or run any build step. The wiki is available read-only from every group (writes scoped to wiki-inbox). `wiki_search` and `wiki_get` work here.',
+          '',
+          `Vault: ${totalPages} pages | ${digest.claimCount || 0} claims | Types: ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}`,
+          `Claim health: ${freshness.fresh ?? 0} fresh, ${freshness.stale ?? 0} stale, ${health.contested ?? 0} contested`,
+          '',
+          'Top pages by claim count:',
+          topPages || '(none)',
+          '',
+          'For deeper access: `wiki_search` to query, `wiki_get` to read full pages, `wiki_status` for live health.',
+        ].join('\n');
+
+        if (globalClaudeMd) {
+          globalClaudeMd += '\n' + digestSummary;
+        } else {
+          globalClaudeMd = digestSummary;
+        }
+        log(`Wiki digest injected (${totalPages} pages, ${digest.claimCount || 0} claims)`);
+      }
+    } catch (err) {
+      log(`Wiki digest load failed (non-fatal): ${(err as Error).message}`);
+    }
   }
 
   // Discover additional directories mounted at /workspace/extra/*
@@ -556,6 +707,34 @@ async function runQuery(
         ? `system/${(message as { subtype?: string }).subtype}`
         : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
+
+    // Emit structured status events for the host to parse.
+    // These go to stderr as [NANOCLAW_STATUS] JSON lines.
+    if (message.type === 'assistant' && 'message' in message) {
+      const assistantMsg = message as { message?: { content?: Array<{ type: string; name?: string; input?: unknown }> } };
+      const toolUses = assistantMsg.message?.content?.filter(
+        (b) => b.type === 'tool_use',
+      );
+      if (toolUses && toolUses.length > 0) {
+        for (const tu of toolUses) {
+          const status = { type: 'tool_start', tool: tu.name || 'unknown', input: summarizeToolInput(tu.name, tu.input) };
+          console.error(`[NANOCLAW_STATUS] ${JSON.stringify(status)}`);
+        }
+      }
+    }
+    if (message.type === 'tool_use_summary') {
+      const summary = (message as { summary?: string }).summary;
+      if (summary) {
+        console.error(`[NANOCLAW_STATUS] ${JSON.stringify({ type: 'tool_done', summary })}`);
+      }
+    }
+    // Compaction / context management events
+    if (message.type === 'system' && (message as { subtype?: string }).subtype === 'status') {
+      console.error(`[NANOCLAW_STATUS] ${JSON.stringify({ type: 'compacting' })}`);
+    }
+    if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
+      console.error(`[NANOCLAW_STATUS] ${JSON.stringify({ type: 'compact_done' })}`);
+    }
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
@@ -662,8 +841,8 @@ async function main(): Promise<void> {
   let containerInput: ContainerInput;
 
   try {
-    const stdinData = await readStdin();
-    containerInput = JSON.parse(stdinData);
+    const firstLine = await readFirstLine();
+    containerInput = JSON.parse(firstLine);
     try {
       fs.unlinkSync('/tmp/input.json');
     } catch {
@@ -697,6 +876,74 @@ async function main(): Promise<void> {
     fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL);
   } catch {
     /* ignore */
+  }
+
+  // Stdin-based IPC: messages arrive via stdin (written by host's queue.sendMessage).
+  // Buffer them here; the query loop and waitForIpcMessage drain this buffer.
+  const stdinIpcBuffer: string[] = [];
+  let stdinIpcClosed = false;
+  let stdinIpcWaiter: (() => void) | null = null;
+
+  setupStdinIpc(
+    (text) => {
+      stdinIpcBuffer.push(text);
+      stdinIpcWaiter?.();
+    },
+    () => {
+      stdinIpcClosed = true;
+      stdinIpcWaiter?.();
+    },
+  );
+
+  /** Drain stdin IPC buffer + filesystem IPC. Returns all pending messages. */
+  function drainAllIpc(): string[] {
+    const messages: string[] = [];
+    // Drain stdin buffer first (instant, no filesystem)
+    while (stdinIpcBuffer.length > 0) {
+      messages.push(stdinIpcBuffer.shift()!);
+    }
+    // Also drain filesystem IPC (legacy fallback + _close sentinel check)
+    const fsMessages = drainIpcInput();
+    messages.push(...fsMessages);
+    return messages;
+  }
+
+  /** Wait for any IPC message (stdin or filesystem). */
+  function waitForAnyIpcMessage(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const poll = () => {
+        if (stdinIpcClosed && shouldClose()) {
+          resolve(null);
+          return;
+        }
+        if (shouldClose()) {
+          resolve(null);
+          return;
+        }
+        // Check stdin buffer first
+        if (stdinIpcBuffer.length > 0) {
+          const all = drainAllIpc();
+          resolve(all.join('\n'));
+          return;
+        }
+        // Check filesystem IPC
+        const fsMessages = drainIpcInput();
+        if (fsMessages.length > 0) {
+          resolve(fsMessages.join('\n'));
+          return;
+        }
+        // Wait for stdin message or poll filesystem again
+        stdinIpcWaiter = () => {
+          stdinIpcWaiter = null;
+          poll();
+        };
+        setTimeout(() => {
+          stdinIpcWaiter = null;
+          poll();
+        }, IPC_POLL_MS);
+      };
+      poll();
+    });
   }
 
   // Build initial prompt (drain any pending IPC messages too)
@@ -741,6 +988,15 @@ async function main(): Promise<void> {
 
   if (isSessionSlashCommand) {
     log(`Handling session command: ${trimmedPrompt}`);
+    // Emit a status event so the host can show a progress indicator in
+    // chat. The normal query loop emits these when SDK events fire, but
+    // this slash-command path has its own loop below and needs to emit
+    // them explicitly.
+    if (trimmedPrompt === '/compact') {
+      console.error(
+        `[NANOCLAW_STATUS] ${JSON.stringify({ type: 'compacting' })}`,
+      );
+    }
     let slashSessionId: string | undefined;
     let compactBoundarySeen = false;
     let hadError = false;
@@ -778,6 +1034,9 @@ async function main(): Promise<void> {
         if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
           compactBoundarySeen = true;
           log('Compact boundary observed — compaction completed');
+          console.error(
+            `[NANOCLAW_STATUS] ${JSON.stringify({ type: 'compact_done' })}`,
+          );
         }
 
         if (message.type === 'result') {
@@ -849,6 +1108,7 @@ async function main(): Promise<void> {
         containerInput,
         sdkEnv,
         resumeAt,
+        drainAllIpc,
       );
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
@@ -870,8 +1130,8 @@ async function main(): Promise<void> {
 
       log('Query ended, waiting for next IPC message...');
 
-      // Wait for the next message or _close sentinel
-      const nextMessage = await waitForIpcMessage();
+      // Wait for the next message via stdin IPC or filesystem fallback
+      const nextMessage = await waitForAnyIpcMessage();
       if (nextMessage === null) {
         log('Close sentinel received, exiting');
         break;
