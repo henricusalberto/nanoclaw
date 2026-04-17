@@ -9,6 +9,7 @@ import { readEnvFile } from '../env.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
+import { maybeResizeImage } from './telegram-media.js';
 import {
   Channel,
   OnChatMetadata,
@@ -97,10 +98,18 @@ export class TelegramChannel implements Channel {
         return null;
       }
 
-      const buffer = Buffer.from(await resp.arrayBuffer());
+      const rawBuffer = Buffer.from(await resp.arrayBuffer());
+      // Images uploaded as documents (rather than photos) arrive at native
+      // resolution. Downsize them before they hit disk so downstream
+      // consumers never see an image that would blow past Anthropic's
+      // 2000px many-image cap.
+      const buffer = await maybeResizeImage(rawBuffer, finalName);
       fs.writeFileSync(destPath, buffer);
 
-      logger.info({ fileId, dest: destPath }, 'Telegram file downloaded');
+      logger.info(
+        { fileId, dest: destPath, bytes: buffer.length },
+        'Telegram file downloaded',
+      );
       return `/workspace/group/attachments/${finalName}`;
     } catch (err) {
       logger.error({ fileId, err }, 'Failed to download Telegram file');

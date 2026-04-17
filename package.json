@@ -31,7 +31,8 @@
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
     "grammy": "^1.39.3",
-    "js-yaml": "^4.1.1"
+    "js-yaml": "^4.1.1",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
