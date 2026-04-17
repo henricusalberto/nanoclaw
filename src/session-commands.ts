@@ -2,8 +2,24 @@ import type { NewMessage } from './types.js';
 import { logger } from './logger.js';
 
 /**
+ * Matches a bare slash command with no arguments — a leading `/` followed by
+ * one or more word characters (letters, digits, underscores, hyphens).
+ *
+ * This is intentionally permissive: it covers the SDK's built-in session
+ * commands (`/compact`, `/clear`, `/cost`, `/model`, `/resume`, ...) AND any
+ * container skill that the user wants to trigger from chat (`/wrap`,
+ * `/status`, `/sunsama`, ...). The SDK will reject commands it doesn't
+ * recognise inside the agent — no need to keep a static allowlist here.
+ *
+ * Commands with arguments (e.g. `/model sonnet`) are intentionally NOT
+ * matched; those carry free-form text and should go through the normal
+ * message path to avoid surprising users.
+ */
+const SLASH_COMMAND_PATTERN = /^\/[a-zA-Z][\w-]*$/;
+
+/**
  * Extract a session slash command from a message, stripping the trigger prefix if present.
- * Returns the slash command (e.g., '/compact') or null if not a session command.
+ * Returns the slash command (e.g., '/compact', '/wrap') or null if not a session command.
  */
 export function extractSessionCommand(
   content: string,
@@ -11,8 +27,8 @@ export function extractSessionCommand(
 ): string | null {
   let text = content.trim();
   text = text.replace(triggerPattern, '').trim();
-  if (text === '/compact') return '/compact';
-  return null;
+  if (!SLASH_COMMAND_PATTERN.test(text)) return null;
+  return text.toLowerCase();
 }
 
 /**
@@ -97,15 +113,17 @@ export async function handleSessionCommand(opts: {
     return { handled: true, success: true };
   }
 
-  // AUTHORIZED: process pre-compact messages first, then run the command
+  // AUTHORIZED: flush any messages received BEFORE the command in the same
+  // batch into the session first — otherwise they'd be lost when the
+  // command (e.g. /compact, /clear) mutates session state. Then run the
+  // command itself.
   logger.info({ group: groupName, command }, 'Session command');
 
   const cmdIndex = missedMessages.indexOf(cmdMsg);
-  const preCompactMsgs = missedMessages.slice(0, cmdIndex);
+  const preCommandMsgs = missedMessages.slice(0, cmdIndex);
 
-  // Send pre-compact messages to the agent so they're in the session context.
-  if (preCompactMsgs.length > 0) {
-    const prePrompt = deps.formatMessages(preCompactMsgs, timezone);
+  if (preCommandMsgs.length > 0) {
+    const prePrompt = deps.formatMessages(preCommandMsgs, timezone);
     let hadPreError = false;
     let preOutputSent = false;
 
@@ -125,16 +143,16 @@ export async function handleSessionCommand(opts: {
 
     if (preResult === 'error' || hadPreError) {
       logger.warn(
-        { group: groupName },
-        'Pre-compact processing failed, aborting session command',
+        { group: groupName, command },
+        'Pre-command message flush failed, aborting session command',
       );
       await deps.sendMessage(
         `Failed to process messages before ${command}. Try again.`,
       );
       if (preOutputSent) {
         // Output was already sent — don't retry or it will duplicate.
-        // Advance cursor past pre-compact messages, leave command pending.
-        deps.advanceCursor(preCompactMsgs[preCompactMsgs.length - 1].timestamp);
+        // Advance cursor past flushed messages, leave command pending.
+        deps.advanceCursor(preCommandMsgs[preCommandMsgs.length - 1].timestamp);
         return { handled: true, success: true };
       }
       return { handled: true, success: false };

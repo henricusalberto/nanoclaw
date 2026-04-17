@@ -18,26 +18,53 @@ describe('extractSessionCommand', () => {
     expect(extractSessionCommand('@Andy /compact', trigger)).toBe('/compact');
   });
 
-  it('rejects /compact with extra text', () => {
-    expect(extractSessionCommand('/compact now please', trigger)).toBeNull();
+  it('detects other bare slash commands (container skills, SDK built-ins)', () => {
+    expect(extractSessionCommand('/wrap', trigger)).toBe('/wrap');
+    expect(extractSessionCommand('/status', trigger)).toBe('/status');
+    expect(extractSessionCommand('/clear', trigger)).toBe('/clear');
+    expect(extractSessionCommand('/cost', trigger)).toBe('/cost');
+    expect(extractSessionCommand('/model', trigger)).toBe('/model');
   });
 
-  it('rejects partial matches', () => {
-    expect(extractSessionCommand('/compaction', trigger)).toBeNull();
+  it('detects commands with hyphens and digits', () => {
+    expect(extractSessionCommand('/add-telegram', trigger)).toBe(
+      '/add-telegram',
+    );
+    expect(extractSessionCommand('/wiki-inbox', trigger)).toBe('/wiki-inbox');
+    expect(extractSessionCommand('/v2', trigger)).toBe('/v2');
+  });
+
+  it('rejects slash commands with arguments', () => {
+    // Commands with args carry free-form text; let them go through the
+    // normal message path rather than round-tripping through the SDK as
+    // a slash command.
+    expect(extractSessionCommand('/compact now please', trigger)).toBeNull();
+    expect(extractSessionCommand('/model sonnet', trigger)).toBeNull();
   });
 
   it('rejects regular messages', () => {
     expect(
       extractSessionCommand('please compact the conversation', trigger),
     ).toBeNull();
+    expect(extractSessionCommand('hello', trigger)).toBeNull();
+    expect(extractSessionCommand('', trigger)).toBeNull();
   });
 
-  it('handles whitespace', () => {
+  it('rejects messages that only contain /', () => {
+    expect(extractSessionCommand('/', trigger)).toBeNull();
+    expect(extractSessionCommand('/1bad', trigger)).toBeNull(); // must start with letter
+  });
+
+  it('handles whitespace around the command', () => {
     expect(extractSessionCommand('  /compact  ', trigger)).toBe('/compact');
+    expect(extractSessionCommand('\n/wrap\n', trigger)).toBe('/wrap');
   });
 
-  it('is case-sensitive for the command', () => {
-    expect(extractSessionCommand('/Compact', trigger)).toBeNull();
+  it('normalises case to lowercase', () => {
+    // Chat-friendly: `/Compact` from mobile autocapitalise becomes `/compact`
+    // so the SDK still recognises it.
+    expect(extractSessionCommand('/Compact', trigger)).toBe('/compact');
+    expect(extractSessionCommand('/WRAP', trigger)).toBe('/wrap');
   });
 });
 
